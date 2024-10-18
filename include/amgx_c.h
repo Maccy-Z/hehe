@@ -360,6 +360,9 @@ AMGX_RC AMGX_API AMGX_vector_download
 (const AMGX_vector_handle vec,
  void *data);
 
+void* vector_pointer_get(AMGX_vector_handle vec);
+
+
 AMGX_RC AMGX_API AMGX_vector_get_size
 (const AMGX_vector_handle vec,
  int *n,

@@ -1193,6 +1193,20 @@ inline AMGX_RC vector_download_impl(const AMGX_vector_handle vec,
 }
 
 template<AMGX_Mode CASE>
+inline void* vector_pointer_get(const AMGX_vector_handle vec)
+{
+    typedef Vector<typename TemplateMode<CASE>::Type> VectorLetterT;
+    typedef CWrapHandle<AMGX_vector_handle, VectorLetterT> VectorW;
+    typedef typename VecPrecisionMap<AMGX_GET_MODE_VAL(AMGX_VecPrecision, CASE)>::Type ValueTypeB;
+    VectorW wrapV(vec);
+    VectorLetterT &v = *wrapV.wrapped();
+
+    return v.raw();
+}
+
+
+
+template<AMGX_Mode CASE>
 inline AMGX_RC vector_get_size(AMGX_vector_handle vec,
                                int *n,
                                int *block_dim)
@@ -3422,6 +3436,31 @@ extern "C" {
         return rc0;
     }
 
+    void* vector_pointer_get(const AMGX_vector_handle vec)
+    {
+        void *rc0 = NULL;
+
+
+            AMGX_Mode mode = get_mode_from<AMGX_vector_handle>(vec);
+
+            switch (mode)
+            {
+                #define AMGX_CASE_LINE(CASE) case CASE: {\
+                rc0 = vector_pointer_get<CASE>(vec);\
+                } \
+                break;
+                AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
+                AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
+                #undef AMGX_CASE_LINE
+
+            default:
+                ;
+                //return AMGX_RC_BAD_MODE;
+
+        }
+        return rc0;
+    }
+
     AMGX_RC AMGX_vector_download_impl(const AMGX_vector_handle vec, void *data)
     {
         nvtxRange nvrf(__func__);
@@ -3439,13 +3478,13 @@ extern "C" {
 
             switch (mode)
             {
-#define AMGX_CASE_LINE(CASE) case CASE: {\
-        rc0 = vector_download_impl<CASE>(vec, data);\
-        } \
-        break;
+                #define AMGX_CASE_LINE(CASE) case CASE: {\
+                                                         rc0 = vector_download_impl<CASE>(vec, data);\
+                                                        } \
+                break;
                     AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
                     AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
-#undef AMGX_CASE_LINE
+                #undef AMGX_CASE_LINE
 
                 default:
                     AMGX_CHECK_API_ERROR(AMGX_ERR_BAD_MODE, resources)
