@@ -524,7 +524,7 @@ class MatrixBase : public AuxData, public Operator<T_Config>
         // We don't specialize the above template to hide CUSP dependency here.
         template< class CuspCooMatrix >
         inline void copyFromCuspCoo( const CuspCooMatrix &A )
-        {
+        {   std::exit(9);
             this->set_initialized(0);
             this->setProps(COO);
             num_rows    = A.get_num_rows();

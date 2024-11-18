@@ -29,6 +29,12 @@ cmake_minimum_required (VERSION 3.18)
 # the project
 project (AMG LANGUAGES C CXX CUDA)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
 find_package(MPI)
 find_package(OpenMP)
 
@@ -269,8 +275,12 @@ IF (WIN32)
   target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver)
   target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver)
 ELSE (WIN32)
-  target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)
-  target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)
+  include_directories(/home/maccyz/miniforge3/envs/amgx3/nsight-compute-2024.2.1/host/target-linux-x64/nvtx/include)
+  target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver nvtx3-cpp m pthread)
+  target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver nvtx3-cpp m pthread)
+  
+  #target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)
+  #target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)
 ENDIF(WIN32)
 
 if(MPI_FOUND)

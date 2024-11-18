@@ -603,16 +603,8 @@ void axmb(Matrix &A, Vector &x, Vector &b, Vector &r, int offset, int size)
 {
     if (size == -1) { size = x.size() / x.get_block_size(); }
 
-#ifndef NDEBUG
-
-    if (x.get_block_dimx() == -1) { FatalError("x block dims not set", AMGX_ERR_NOT_IMPLEMENTED); }
-
-    if (b.get_block_dimx() == -1) { FatalError("b block dims not set", AMGX_ERR_NOT_IMPLEMENTED); }
-
-    if (r.get_block_dimx() == -1) { FatalError("r block dims not set", AMGX_ERR_NOT_IMPLEMENTED); }
-
-#endif
     typedef typename Matrix::value_type ValueType;
+
     A.apply(x, r);
     thrust_axpby<Vector::TConfig::memSpace>(
                  r.begin() + offset * x.get_block_size(),

@@ -2,182 +2,22 @@
 //
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include <solvers/fgmres_solver.h>
+#include <amgx_cublas.h>
 #include <blas.h>
-#include <cusp/blas.h>
-#include <util.h>
+#include <chrono>
 #include <cutil.h>
 #include <norm.h>
+#include <util.h>
+#include <cusp/blas.h>
+#include <solvers/fgmres_solver.h>
+
+#include "solvers/fgmres_utils.h"
 
 //TODO remove synchronization from this module by moving host operations to the device
 
+
 namespace amgx
 {
-
-template <class TConfig>
-void KrylovSubspaceBuffer<TConfig>::set_max_dimension(int max_dimension)
-{
-    m_V_vector.resize( max_dimension + 2 );
-    m_Z_vector.resize( max_dimension + 1 );
-
-    //set the pointers to NULL (they will be [re]allocated only if they are NULL)
-    for (int i = 0; i < max_dimension + 1; i++)
-    {
-        m_V_vector[i] = NULL;
-        m_Z_vector[i] = NULL;
-    }
-
-    m_V_vector[max_dimension + 1] = NULL;
-    //this looks kind of hacky
-    this->max_dimension = max_dimension + 1;
-}
-
-template <class TConfig>
-KrylovSubspaceBuffer<TConfig>::KrylovSubspaceBuffer()
-{
-    this->dimension = -1;
-    this->max_dimension = 0;
-    this->N = 0;
-}
-
-template <class TConfig>
-KrylovSubspaceBuffer<TConfig>::~KrylovSubspaceBuffer()
-{
-    for (int i = 0; i < m_V_vector.size(); i++)
-    {
-        delete m_V_vector[i];
-    }
-
-    for (int i = 0; i < m_Z_vector.size(); i++)
-    {
-        delete m_Z_vector[i];
-    }
-}
-
-template <class TConfig>
-bool KrylovSubspaceBuffer<TConfig>::set_iteration(int m)
-{
-    if ( m > this->iteration + 1 )
-    {
-        FatalError("Internal error in set_iteration: It seems like one iteration has not been set", AMGX_ERR_UNKNOWN);
-    }
-
-    //if we haven't reached this iteration yet and haven't reached the max dimension, try to increase dimension and if that fails, tell.
-    if ( (m > this->iteration) && (this->dimension < this->max_dimension) && (!this->increase_dimension()))
-    {
-        return false;
-    }
-
-    this->iteration = m;
-    return true;
-}
-
-template <class TConfig>
-int KrylovSubspaceBuffer<TConfig>::get_smallest_m()
-{
-    return std::max(this->iteration + 1 - this->dimension, 0);
-}
-
-
-template <class TConfig>
-bool KrylovSubspaceBuffer<TConfig>::increase_dimension()
-{
-    if ( this->N < 1 )
-    {
-        FatalError("N cannot be smaller than 1.", AMGX_ERR_UNKNOWN );
-    }
-
-    if (this->dimension == this->max_dimension )
-    {
-        return true;
-    }
-
-    //grow krylov space
-    //check whether m_Z_vector of the same size has already been allocated
-    if ((m_Z_vector[dimension] != NULL) && (m_Z_vector[dimension]->size() != N))
-    {
-        delete m_Z_vector[dimension];
-        m_Z_vector[dimension] = NULL;
-    }
-
-    //check whether m_V_vector of the same size has already been allocated
-    if ((m_V_vector[dimension + 1] != NULL) && (m_V_vector[dimension + 1]->size() != N))
-    {
-        delete m_V_vector[dimension + 1];
-        m_V_vector[dimension + 1] = NULL;
-    }
-
-    //allocate the vector if it has not been allocated (or was not allocated with the same size)
-    try
-    {
-        if (m_Z_vector[dimension] == NULL)
-        {
-            m_Z_vector[dimension] = new VVector(N);
-        }
-
-        if (m_V_vector[dimension + 1] == NULL)
-        {
-            m_V_vector[dimension + 1] = new VVector(N);
-        }
-    }
-    catch (std::bad_alloc &e)
-    {
-        //inform user
-        std::cout << "WARNING: Cannot allocate next Krylov vector, out of memory. Falling back to DQGMRES" << std::endl;
-        //clear error from error history
-        cudaGetLastError();
-        //reset max dimension
-        this->max_dimension = this->dimension;
-        //back out and tell
-        return false;
-    }
-
-    // init Z and V
-    m_V_vector[dimension + 1]->set_block_dimy(this->blockdim);
-    m_V_vector[dimension + 1]->set_block_dimx(1);
-    m_V_vector[dimension + 1]->dirtybit = 1;
-    m_V_vector[dimension + 1]->delayed_send = 1;
-    m_V_vector[dimension + 1]->tag = this->tag * 100 + max_dimension + dimension + 1;
-    m_Z_vector[dimension]->set_block_dimy(this->blockdim);
-    m_Z_vector[dimension]->set_block_dimx(1);
-    m_Z_vector[dimension]->dirtybit = 1;
-    m_Z_vector[dimension]->delayed_send = 1;
-    m_Z_vector[dimension]->tag = this->tag * 100 + dimension;
-    dimension++;
-    return true;
-}
-
-template <class TConfig>
-Vector<TConfig> &KrylovSubspaceBuffer<TConfig>::V(int m)
-{
-    if ( m > this->iteration + 1 )
-    {
-        FatalError("Try to access unallocated V-vector. You have to set the iteration before accessing this vector", AMGX_ERR_BAD_PARAMETERS );
-    }
-
-    if ( m < this->get_smallest_m() )
-    {
-        FatalError("Try to access forgotten V-vector.", AMGX_ERR_BAD_PARAMETERS );
-    }
-
-    return *(this->m_V_vector[m % (this->dimension + 1)]);
-}
-
-template <class TConfig>
-Vector<TConfig> &KrylovSubspaceBuffer<TConfig>::Z(int m)
-{
-    if ( m > this->iteration )
-    {
-        FatalError("Try to access unallocated Z-vector. You have to set the iteration before accessing this vector", AMGX_ERR_BAD_PARAMETERS );
-    }
-
-    if ( m < this->get_smallest_m() )
-    {
-        FatalError("Try to access forgotten Z-vector.", AMGX_ERR_BAD_PARAMETERS );
-    }
-
-    return *(this->m_Z_vector[m % this->dimension]);
-}
 
 //init the frist vector
 template <class TConfig>
@@ -187,27 +27,6 @@ void KrylovSubspaceBuffer<TConfig>::setup(int N, int blockdim, int tag)
     this->blockdim = blockdim;
     this->tag = tag;
     this->iteration = -1;
-    this->dimension = 0;
-
-    //init V(0)
-    //check whether m_V_vector of the same size has already been allocated
-    if ((m_V_vector[0] != NULL) && (m_V_vector[0]->size() != N))
-    {
-        delete m_V_vector[0];
-        m_V_vector[0] = NULL;
-    }
-
-    //allocate the vector if it has not been allocated (or was not allocated with the same size)
-    if (m_V_vector[0] == NULL)
-    {
-        m_V_vector[0] = new VVector(N);
-    }
-
-    m_V_vector[0]->set_block_dimy(this->blockdim);
-    m_V_vector[0]->set_block_dimx(1);
-    m_V_vector[0]->dirtybit = 1;
-    m_V_vector[0]->delayed_send = 1;
-    m_V_vector[0]->tag = this->tag * 100 + max_dimension + 1;
 }
 
 
@@ -238,16 +57,6 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     {
         m_krylov_size = std::min( m_krylov_size, krylov_param );
     }
-
-    //Using L2 norm is ok, however we will do the extra computations
-    //if( this->m_norm_type != L2 )
-    //  FatalError("FGMRES only works with L2 norm. Other norms would require extra computations. ", AMGX_ERR_NOT_SUPPORTED_TARGET);
-    m_H.resize( m_R + 1, m_R );
-    m_s.resize( m_R + 1 );
-    m_cs.resize( m_R );
-    m_sn.resize( m_R );
-    gamma.resize( m_R + 1 );
-    subspace.set_max_dimension( m_krylov_size );
 }
 
 template<class T_Config>
@@ -280,69 +89,27 @@ FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
     ViewType oldView = this->m_A->currentView();
     this->m_A->setViewExterior();
     //should we warn the user about the extra computational work?
+    // printf("m_nrm.size() = %d, m_use_scalar_norm = %d, m_norm_type = %d\n", this->m_nrm.size(), this->m_use_scalar_norm, this->m_norm_type);
     use_scalar_L2_norm = (this->m_nrm.size() == 1 || this->m_use_scalar_norm) && this->m_norm_type == L2;
     subspace.setup(this->m_A->get_num_cols()*this->m_A->get_block_dimy(), this->m_A->get_block_dimy(), this->tag);
     residual.tag = (this->tag + 1) * 100 - 2;
 
+
     if ( this->m_R == 1 || this->m_max_iters == 1 )
-    {
+    {   std::exit(69);
         update_x_every_iteration = true;
         update_r_every_iteration = false;
     }
     else
     {
+        // printf("krylov_size = %d, R = %d\n", m_krylov_size, m_R);
+        // printf("use_scalar_L2_norm = %d\n", use_scalar_L2_norm);
         // The update of x is needed only if running the truncated gmres
         update_x_every_iteration = (m_krylov_size < m_R);
-        update_r_every_iteration = (!use_scalar_L2_norm || (m_krylov_size < m_R)) && Base::m_monitor_convergence;
+        update_r_every_iteration = false; // (!use_scalar_L2_norm || (m_krylov_size < m_R)) && Base::m_monitor_convergence;
     }
 
     this->m_A->setView(oldView);
-}
-
-template <typename ValueType>
-static __host__ void GeneratePlaneRotation( ValueType &dx, ValueType &dy, ValueType &cs, ValueType &sn )
-{
-    if (dy < ValueType(0.0))
-    {
-        cs = 1.0;
-        sn = 0.0;
-    }
-    else if (abs(dy) > abs(dx))
-    {
-        ValueType tmp = dx / dy;
-        sn = ValueType(1.0) / sqrt(ValueType(1.0) + tmp * tmp);
-        cs = tmp * sn;
-    }
-    else
-    {
-        ValueType tmp = dy / dx;
-        cs = ValueType(1.0) / sqrt(ValueType(1.0) + tmp * tmp);
-        sn = tmp * cs;
-    }
-}
-
-template <typename ValueType>
-void PlaneRotation( cusp::array2d<ValueType, cusp::host_memory, cusp::column_major> &H,
-                    cusp::array1d<ValueType, cusp::host_memory> &cs,
-                    cusp::array1d<ValueType, cusp::host_memory> &sn,
-                    cusp::array1d<ValueType, cusp::host_memory> &s,
-                    int i)
-{
-    ValueType temp;
-
-    for (int k = 0; k < i; k++)
-    {
-        temp     =  cs[k] * H(k, i) + sn[k] * H(k + 1, i);
-        H(k + 1, i) = -sn[k] * H(k, i) + cs[k] * H(k + 1, i);
-        H(k, i)   = temp;
-    }
-
-    GeneratePlaneRotation(H(i, i), H(i + 1, i), cs[i], sn[i]);
-    H(i, i) = cs[i] * H(i, i) + sn[i] * H(i + 1, i);
-    H(i + 1, i) = 0.0;
-    temp = cs[i] * s[i];
-    s[i + 1] = -sn[i] * s[i];
-    s[i] = temp;
 }
 
 template<class T_Config>
@@ -357,49 +124,48 @@ FGMRES_Solver<T_Config>::solve_init( VVector &b, VVector &x, bool xIsZero )
     residual.delayed_send = 1;
 }
 
-//check for convergence
-//al the complicated stuff happens here
-template <class TConfig>
-AMGX_STATUS
-FGMRES_Solver<TConfig>::checkConvergenceGMRES(bool check_V_0)
-{
-    if ( Base::m_monitor_convergence)
-    {
-        //enable blas operations
-        Operator<TConfig> &A = *this->m_A;
-        int offset, size;
-        A.getOffsetAndSizeForView(A.getViewExterior(), &offset, &size);
 
-        if ( this->use_scalar_L2_norm && !update_r_every_iteration )
-        {
-            this->m_nrm[0] = this->beta;
-            return this->converged();
-        }
-        else
-        {
-            if ( check_V_0 )
-            {
-                get_norm( A, subspace.V(0), A.get_block_dimy(), this->m_norm_type, this->m_nrm );
-                return this->converged();
-            }
-            else
-            {
-                if ( !update_r_every_iteration )
-                {
-                    FatalError("have to compute the residual every iteration to compute a norm other than scalar L2", AMGX_ERR_BAD_PARAMETERS );
-                }
+template <typename T>
+void gram_schmidt_step(T* V, int n, int m, T* H, int ldH, T* Vm1) {
+    /*  V: pointer to V, Matrix of previous vectors. size n x (m+1), columns V(0) to V(m), stored column-major
+        H: pointer to m_H. Matrix Hessenberg with leading dimension ldH
+        Vm1: pointer to V(m+1), vector to be orthogonalized, size n*/
 
-                //compute norm of r
-                get_norm( A, residual, A.get_block_dimy(), this->m_norm_type, this->m_nrm );
-                return this->converged();
-            }
-        }
-    }
-    else
-    {
-        return AMGX_ST_CONVERGED;
-    }
+    float one = 1.0f;
+    float zero = 0.0f;
+    float minus_one = -1.0f;
+
+    // Compute H(i, m) = <V(i), V(m+1)> for i = 0 to m
+    // H_col points to H(:, m)
+    float* H_col = &H[m * ldH];  // H(:, m)
+
+    // Compute H(:, m) = V^T * Vm1
+    Cublas::gemv(true,     // Transpose operation
+                n,                       // Number of rows in V
+                m + 1,                   // Number of columns in V (from V(0) to V(m))
+                &one,                    // Scalar alpha
+                V,                       // Matrix V
+                n,                       // Leading dimension of V
+                Vm1,                     // Vector V(m+1)
+                1,                       // Increment for Vm1
+                &zero,                   // Scalar beta
+                H_col,                   // Resulting vector H(:, m)
+                1);                      // Increment for H_col
+
+    // Update Vm1 = Vm1 - V * H(:, m)
+    Cublas::gemv(false,     // No transpose operation
+                n,                       // Number of rows in V
+                m + 1,                   // Number of columns in V
+                &minus_one,              // Scalar alpha (-1.0)
+                V,                       // Matrix V
+                n,                       // Leading dimension of V
+                H_col,                   // Vector H(:, m)
+                1,                       // Increment for H_col
+                &one,                    // Scalar beta
+                Vm1,                     // Vector Vm1 (updated in-place)
+                1);                      // Increment for Vm1
 }
+
 
 
 //Run preconditioned GMRES
@@ -407,165 +173,138 @@ template<class T_Config>
 AMGX_STATUS
 FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 {
-    AMGX_STATUS conv_stat = AMGX_ST_CONVERGED;
+    // AMGX_STATUS conv_stat = AMGX_ST_CONVERGED;
+    cublasHandle_t handle = Cublas::get_handle();
+    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
 
     Operator<T_Config> &A = *this->m_A;
-    ViewType oldView = A.currentView();
-    A.setViewExterior();
-    int offset, size;
-    A.getOffsetAndSizeForView(A.getViewExterior(), &offset, &size);
-    int m = this->m_curr_iter % m_R; //current iteration within restart
+    int m = this->m_curr_iter % m_R;
 
-    if (m == 0)
-    {
+    printf("\nm = %d\n", m);
+
+    auto new_basis = subspace.new_basis;
+    float* new_basis_ptr = thrust::raw_pointer_cast(new_basis.data());
+    auto& V = subspace.V_matrix;
+    auto& H = subspace.H_Matrix;
+
+    // A matrix
+    auto & A_ptr = dynamic_cast<Matrix<T_Config>&>(*this->m_A);
+
+    if (m == 0){
         //initialize gmres
-        subspace.set_iteration(0);
+        //subspace.set_iteration(0);
+        subspace.iteration = 0;
         // compute initial residual r0 = b - Ax
-        axmb( A, x, b, subspace.V(0), offset, size );
-        // compute initial residual norm
-        this->beta = get_norm(A, subspace.V(0), L2);
+        float* x_ptr = (float*) x.raw();
 
-        // check for convergence (do we need it? leave it here for now)
-        if ( (this->m_curr_iter == 0) &&
-             isDone( (conv_stat = checkConvergenceGMRES( true ) ) ) )
-        {
-            return conv_stat;
-        }
+        thrust::copy(b.begin(), b.end(), new_basis.begin());
+        spmv_axpy(A_ptr, x_ptr, new_basis_ptr, -1.0f, 1.0f);
 
         // normalize initial residual
-        scal( subspace.V(0), ValueTypeB(1.0 / this->beta), offset, size );
-        //set reduced system rhs = beta*e1
-        thrust_wrapper::fill<AMGX_host>( m_s.begin(), m_s.end(), ValueTypeB(0.0) );
-        m_s[0] = this->beta;
+        // float beta = computeL2Norm(new_basis);
+        // thrust::transform(new_basis.begin(), new_basis.end(), new_basis.begin(), scale_by_norm(beta));
+        normaliseL2(new_basis);
+        V.setColumn(m, new_basis_ptr);
+
+        // printvec(y, 10);
+
+        // compute initial residual r0 = b - Ax
+        // axmb( A, x, b, subspace.V(0), offset, size );
+        // // compute initial residual norm
+        // this->beta = get_norm(A, subspace.V(0), L2);
+        //
+        // // normalize initial residual
+        // scal( subspace.V(0), ValueTypeB(1.0 / this->beta), offset, size );
+        // //set reduced system rhs = beta*e1
+        // thrust_wrapper::fill<AMGX_host>( m_s.begin(), m_s.end(), ValueTypeB(0.0) );
+        // m_s[0] = this->beta;
     }
 
-    //our krylov space is now smaller than m!
-    //because we hadn't updated x before, we have to form
-    //change the base formed by Z
-    if ( !subspace.set_iteration(m) )
-    {
-        //we have to start updating x from now on, so prepare Z for that now
-        if ( !update_x_every_iteration )
-        {
-            //TODO: There could be a more efficient way to do this
-            for (int k = 1; k < m; k++)
-            {
-                // This can be written as [Z] * inv(R), where R=Q*H. It is more efficient to do M-M product.
-                // But this would require the memory to be in consecutive chunk. This is not what
-                // the lazy memory allocation does.
-                //p_k = [z_k - sum( h_ik*p_i )] / h_kk
-                for (int i = 0; i < k; i++)
-                {
-                    axpy( subspace.Z(i), subspace.Z(k), -m_H(i, k), offset, size );
-                }
-
-                scal( subspace.Z(k), ValueTypeB(1.0) / m_H(k, k), offset, size );
-                // This can be written as dense M-V product, [Z]*gamma[1:m-1]
-                //x_k = x_k-1 + gamma_k*p_k
-                axpy( subspace.Z(k), x, gamma[k], offset, size );
-            }
-
-            update_x_every_iteration = true;
-        }
-
-        if ( !update_r_every_iteration && Base::m_monitor_convergence)
-        {
-            //compute residual
-            axmb( A, x, b, residual, offset, size );
-            update_r_every_iteration = true;
-        }
-
-        subspace.set_iteration(m); //if the allocation failed, we have to set the iteration again
-    }
+    // Copy new_basis into V
+    subspace.iteration = m;
 
     // Run one iteration of preconditioner with zero initial guess and v_m as rhs, i.e. solve Az_m=v_m
-    if (use_preconditioner)
-    {
-        m_preconditioner->solve( subspace.V(m), subspace.Z(m), true ); //TODO: check if using zero as initial solution when solving for residual inside subspace is correct 
-    }
-    else
-    {
-        copy(subspace.V(m), subspace.Z(m), offset, size);
-    }
+    // copy(subspace.V(m), subspace.Z(m), offset, size);
 
     //obtain v_m+1 := A*z_m
-    A.apply( subspace.Z(m), subspace.V(m + 1) );
+    // A.apply( subspace.Z(m), subspace.V(m + 1) );
+    spmv_axpy(A_ptr, V.getColPtr(m), new_basis_ptr, 1.0f, 0.0f);
+
+    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_HOST);
+    gram_schmidt_step(V.getColPtr(0), 10200, m, H.getDevicePointer(), 251, new_basis_ptr);
+
 
     // Modified Gram-Schmidt
-    for ( int i = subspace.get_smallest_m(); i <= m; i++ )
-    {
-        // H(i,m) = <V(i),V(m+1)>
-        m_H(i, m) = dot(A, subspace.V(i), subspace.V(m + 1));
-        // V(m+1) -= H(i, m) * V(i)
-        axpy( subspace.V(i), subspace.V(m + 1), -m_H(i, m), offset, size );
-    }
-
+    // for ( int i = 0; i <= m; i++ )
+    // {
+    //     m_H(i, m) = dotc(V.getColThrust(i+1), new_basis, 0, 10200);
+    //
+    //
+    //     // // H(i,m) = <V(i),V(m+1)>
+    //     // m_H(i, m) = dot(A, subspace.V(i), subspace.V(m + 1));
+    //     // // V(m+1) -= H(i, m) * V(i)
+    //     // axpy( subspace.V(i), subspace.V(m + 1), -m_H(i, m), offset, size );
+    //
+    // }
+    //
     //H(m+1,m) = || v_m+1 ||
-    m_H(m + 1, m) = get_norm(A, subspace.V(m + 1), L2);
-    //normalize v_m+1
-    scal( subspace.V(m + 1), ValueTypeB(1.0) / m_H(m + 1, m), offset, size );
-    this->gamma[m] = m_s[m];
-    PlaneRotation( m_H, m_cs, m_sn, m_s, m );
+    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
 
-    if ( update_x_every_iteration )
-    {
-        //p_m = [z_m - sum( h_im*p_i )] / h_mm
-        // This is dense [Z]*[-H(smallest_m:m-1,m); 1] / m_H(m,m)
-        for (int i = subspace.get_smallest_m(); i < m; i++)
-        {
-            axpy( subspace.Z(i), subspace.Z(m), -m_H(i, m), offset, size );
-        }
+    float* norm = compute_L2_norm(new_basis);
+    H.set_element_device(m+1, m, norm);
+    // float norm = computeL2Norm(new_basis);
+    // H.set_element(m + 1, m, norm);
+    // // m_H(m + 1, m) = get_norm(A, subspace.V(m + 1), L2);
+    // //normalize v_m+1
 
-        scal( subspace.Z(m), ValueTypeB(1.0) / m_H(m, m), offset, size );
-        //x_m = x_m-1 + gamma_m*pm
-        axpy( subspace.Z(m), x, m_s[m], offset, size );
-    }
+    scale_vector(new_basis, norm);
+    //thrust::transform(new_basis.begin(), new_basis.end(), new_basis.begin(), scale_by_norm(norm));
+    // // scal( subspace.V(m + 1), ValueTypeB(1.0) / m_H(m + 1, m), offset, size );
+    // scal( V_test, ValueTypeB(1.0) / m_H(m + 1, m), offset, size );
 
-    if ( update_r_every_iteration )
-    {
-        // This is the recursion in Christophe's presentation
-        // r_m = gamma_m+1*( c_m*v_m+1 - s_m*r_m-1/gamma_m )
-        // r_m = (gamma_m+1*c_m)*v_m+1 + (-gamma_m+1*s_m/gamma_m)*r_m-1)
-        if ( m == 0 )
-        {
-            axpby( subspace.V(1), subspace.V(0), residual, m_s[m + 1]*m_cs[m], ValueTypeB(-1.0 * m_s[m + 1]*m_sn[m]), offset, size );
-        }
-        else
-        {
-            axpby( subspace.V(m + 1), residual, residual, m_s[m + 1]*m_cs[m], ValueTypeB(-1.0 * m_s[m + 1]*m_sn[m] / gamma[m]), offset, size );
-        }
-    }
+    V.setColumn(m+1, new_basis_ptr);
 
-    // Check for convergence
-    // abs(s[m+1]) = L2 norm of residual
-    this->beta = abs( m_s[m + 1] );
-    conv_stat = checkConvergenceGMRES( false );
-
-    // If reached restart limit or last iteration or if converged, compute x vector
-    if ( !update_x_every_iteration && (m == m_R - 1 || this->is_last_iter() || isDone(conv_stat) ))
-    {
+    printvec(V.getColPtr(m), 10);
+    printvec(H.getColPtr(m), 10);
+    // copy(V_test, subspace.V(m + 1), offset, size);
+    //
+    //
+    // this->gamma[m] = m_s[m];
+    // PlaneRotation( m_H, m_cs, m_sn, m_s, m );
+    //
+    //
+    // // If reached restart limit or last iteration or if converged, compute x vector
+    if (this->is_last_iter() || m==2 )
+    {   // printf("m = %d, m_R = %d, is_last_iter = %d, isDone = %d\n", m, m_R, this->is_last_iter(), isDone(conv_stat));
         // Solve upper triangular system in place
-        for (int j = m; j >= 0; j--)
-        {
-            m_s[j] /= m_H(j, j);
-
-            //S(0:j) = s(0:j) - s[j] H(0:j,j)
-            for (int k = j - 1; k >= 0; k--)
-            {
-                m_s[k] -= m_H(k, j) * m_s[j];
-            }
-        }
 
         //    Update the solution
         // This is dense M-V, x += [Z]*m_s
-        for (int j = 0; j <= m; j++)
-        {
-            axpy( subspace.Z(j), x, m_s[j], offset, size );
-        }
+        std::exit(69);
+        // for (int j = m; j >= 0; j--)
+        // {
+        //     m_s[j] /= m_H(j, j);
+        //
+        //     //S(0:j) = s(0:j) - s[j] H(0:j,j)
+        //     for (int k = j - 1; k >= 0; k--)
+        //     {
+        //         m_s[k] -= m_H(k, j) * m_s[j];
+        //     }
+        // }
+        // for (int j = 0; j <= m; j++)
+        // {
+        //     axpy( subspace.V(j), x, m_s[j], offset, size ); // m_s[j]+=a*x
+        // }
     }
+    //
+    //
+    // A.setView(oldView);
+    //
+    //
+    // std::exit(69);
 
-    A.setView(oldView);
-    return Base::m_monitor_convergence ? conv_stat : AMGX_ST_CONVERGED;
+    return AMGX_ST_NOT_CONVERGED;
+    //return Base::m_monitor_convergence ? conv_stat : AMGX_ST_CONVERGED;
 }
 
 template<class T_Config>

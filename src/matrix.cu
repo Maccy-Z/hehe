@@ -221,7 +221,10 @@ Matrix< TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> >::apply(cons
 template <AMGX_VecPrecision t_vecPrec, AMGX_MatPrecision t_matPrec, AMGX_IndPrecision t_indPrec>
 void
 Matrix< TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> >::apply(const Vector<TConfig> &v, Vector<TConfig> &res, ViewType view)
-{
+ {   // auto x = *this;
+    //printf("A row pointer: %p\n", x.row_offsets.raw());
+
+
     Vector<TConfig> &v_ = const_cast<Vector<TConfig>&>(v);
     multiply(*this, v_, res, view);
 }

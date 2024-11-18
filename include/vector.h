@@ -145,6 +145,8 @@ class Vector<TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> > : publ
         typedef typename MemorySpaceMap<AMGX_host>::Type host_memory;
         typedef typename MemorySpaceMap<AMGX_device>::Type device_memory;
     public:
+        static constexpr const char* my_id = "HostVector";
+
         typedef TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> TConfig;
         typedef TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> TConfig_h;
         typedef TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> TConfig_d;
@@ -407,6 +409,8 @@ class Vector<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> > : pu
         typedef typename MemorySpaceMap<AMGX_host>::Type host_memory;
         typedef typename MemorySpaceMap<AMGX_device>::Type device_memory;
     public:
+        static constexpr const char* my_id = "DeviceVector";
+
         typedef TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> TConfig;
         typedef TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> TConfig_h;
         typedef TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> TConfig_d;
@@ -673,17 +677,6 @@ class Vector<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> > : pu
         int explicit_buffer_size;
         int buffer_size;
         cudaEvent_t mpi_event;
-
-#ifdef AMGX_WITH_MPI
-        std::vector<MPI_Request> requests;
-        std::vector<MPI_Status> statuses;
-
-        std::vector<MPI_Request> send_requests;
-        std::vector<MPI_Request> recv_requests;
-
-        std::vector<MPI_Status> send_statuses;
-        std::vector<MPI_Status> recv_statuses;
-#endif
 
     private:
         DistributedManager<TConfig> *manager;

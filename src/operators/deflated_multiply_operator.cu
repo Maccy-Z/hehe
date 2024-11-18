@@ -17,7 +17,7 @@ namespace amgx
 
 template <typename TConfig>
 void DeflatedMultiplyOperator<TConfig>::apply(const Vector<TConfig> &v, Vector<TConfig> &res, ViewType view)
-{
+{   std::exit(4);
     Operator<TConfig> &A = *m_A;
     int offset, size;
     A.getOffsetAndSizeForView(view, &offset, &size);
