@@ -187,7 +187,7 @@ void spmv_axpy(
         &beta,
         vecY,
         CUDA_R_32F,
-        CUSPARSE_MV_ALG_DEFAULT,
+        CUSPARSE_SPMV_ALG_DEFAULT,
         &bufferSize
     ));
 
@@ -203,7 +203,7 @@ void spmv_axpy(
         &beta,
         vecY,
         CUDA_R_32F,
-        CUSPARSE_MV_ALG_DEFAULT,
+        CUSPARSE_SPMV_ALG_DEFAULT,
         dBuffer
     ));
 }

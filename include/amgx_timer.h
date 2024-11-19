@@ -14,7 +14,8 @@
 
 #ifdef NVTX_RANGES
 // #include "nvToolsExt.h"
-#include <nvtx3/nvtx3.hpp>
+// #include <nvtx3/nvtx3.hpp>
+#include <nvtx3/nvToolsExt.h>
 #endif
 
 #include <vector>
