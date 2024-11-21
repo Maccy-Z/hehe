@@ -7,6 +7,26 @@
 #include<solvers/solver.h>
 #include<cusp/array1d.h>
 #include<cusp/array2d.h>
+#include<cusolverDn.h>
+// #include "fgmres_utils.h"
+
+// Error checking macro for cuBLAS calls
+#define CUBLAS_CHECK(status) \
+if (status != CUBLAS_STATUS_SUCCESS) { \
+std::cerr << "cuBLAS Error: " << status \
+<< " at line " << __LINE__ << std::endl; \
+exit(EXIT_FAILURE); \
+}
+
+#define CHECK_CUSPARSE(func) { \
+cusparseStatus_t status = (func); \
+if (status != CUSPARSE_STATUS_SUCCESS) { \
+fprintf(stderr, "cuSPARSE API failed at line %d with error: %d\n", \
+__LINE__, status); \
+exit(EXIT_FAILURE); \
+} \
+}
+
 
 namespace amgx
 {
@@ -92,11 +112,15 @@ class CudaMatrix {
         }
 
         void set_element(int row, int col, float value) {
+            if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+                std::cerr << "Error: Row or column index out of bounds in setElement()." << std::endl;
+                exit(EXIT_FAILURE);
+            }
             float* d_ptr = d_matrix_ + static_cast<size_t>(col) * rows_ + row;
             cudaMemcpy(d_ptr, &value, sizeof(float), cudaMemcpyHostToDevice);
         }
 
-    void set_element_device(int row, int col, const float* device_value) {
+        void set_element_device(int row, int col, const float* device_value) {
             // Calculate the device pointer to the target matrix element
             float* d_ptr = d_matrix_ + static_cast<size_t>(col) * rows_ + row;
 
@@ -141,6 +165,223 @@ class CudaMatrix {
         float* d_matrix_; // Device pointer to the matrix
 };
 
+class LeastSquaresSolver {
+public:
+    LeastSquaresSolver(cusolverDnHandle_t cusolverH, cublasHandle_t cublasH,
+                       int m, int n)
+        : cusolverH_(cusolverH), cublasH_(cublasH), m_(m), n_(n),
+          d_tau_(nullptr), devInfo_(nullptr), d_work_(nullptr), lwork_(0) {
+        allocate_cuda_memory();
+    }
+
+    ~LeastSquaresSolver() {
+        cudaFree(d_tau_);
+        cudaFree(devInfo_);
+        cudaFree(d_work_);
+    }
+
+    void lstsq_solve(float* d_A, float* d_b) {
+    // Compute QR factorization
+    cusolverDnSgeqrf(cusolverH_, m_, n_, d_A, m_, d_tau_,
+                     d_work_, lwork_, devInfo_);
+
+    // Compute Q^T * b
+    cusolverDnSormqr(cusolverH_, CUBLAS_SIDE_LEFT, CUBLAS_OP_T,
+                     m_, 1, n_, d_A, m_, d_tau_,
+                     d_b, m_, d_work_, lwork_, devInfo_);
+    //
+    // Solve R * x = c
+    constexpr int nrhs = 1;
+    constexpr float alpha = 1.0f;
+    //
+
+    cublasSetPointerMode(cublasH_, CUBLAS_POINTER_MODE_HOST);
+    CUBLAS_CHECK(cublasStrsm(cublasH_, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_UPPER,
+                CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
+                n_, nrhs, &alpha, d_A, m_, d_b, m_));
+    }
+
+private:
+    void allocate_cuda_memory() {
+        // Allocate device memory for d_tau and devInfo
+        cudaMalloc((void**)&d_tau_, n_ * sizeof(float));
+        cudaMalloc((void**)&devInfo_, sizeof(int));
+
+        // Query working space of geqrf and ormqr
+        int lwork_geqrf = 0;
+        int lwork_ormqr = 0;
+
+        float* d_A_2 = nullptr;
+        float* d_b_2 = nullptr;
+
+        cusolverDnSgeqrf_bufferSize(cusolverH_, m_, n_, d_A_2, m_, &lwork_geqrf);
+        cusolverDnSormqr_bufferSize(cusolverH_, CUBLAS_SIDE_LEFT, CUBLAS_OP_T,
+                                    m_, 1, n_, d_A_2, m_, d_tau_, d_b_2, n_, &lwork_ormqr);
+
+        lwork_ = (lwork_geqrf > lwork_ormqr) ? lwork_geqrf : lwork_ormqr;
+        cudaMalloc((void**)&d_work_, lwork_ * sizeof(float));
+    }
+
+    // Handles
+    cusolverDnHandle_t cusolverH_;
+    cublasHandle_t cublasH_;
+
+    // Device pointers
+    float* d_tau_;
+    int* devInfo_;
+    float* d_work_;
+    int lwork_;
+
+    // Dimensions
+    int m_;
+    int n_;
+};
+
+template<typename T_Config>
+class SpmvAxpy {
+public:
+    SpmvAxpy()
+                : matA(nullptr), vecX(nullptr), vecY(nullptr),
+                  dBuffer(nullptr), bufferSize(0),
+                  num_rows(0), num_cols(0), nnz(0),
+                  matrix_set(false)
+    {
+        // Initialize the cuSPARSE handle
+        handle = Cusparse::get_instance().get_handle();
+    }
+
+    ~SpmvAxpy() {
+        // Destroy descriptors if they were created
+        if (matA) {
+            cusparseDestroySpMat(matA);
+            matA = nullptr;
+        }
+        if (vecX) {
+            cusparseDestroyDnVec(vecX);
+            vecX = nullptr;
+        }
+        if (vecY) {
+            cusparseDestroyDnVec(vecY);
+            vecY = nullptr;
+        }
+        // Free buffer if it was allocated
+        if (dBuffer) {
+            cudaFree(dBuffer);
+            dBuffer = nullptr;
+        }
+    }
+
+    void set_matrix(Matrix<T_Config> &A) {
+        // If a matrix was previously set, clean up existing resources
+        if (matrix_set) {
+            if (matA) {
+                cusparseDestroySpMat(matA);
+                matA = nullptr;
+            }
+            if (dBuffer) {
+                cudaFree(dBuffer);
+                dBuffer = nullptr;
+                bufferSize = 0;
+            }
+        }
+
+        // Store matrix dimensions
+        num_rows = A.get_num_rows();
+        num_cols = A.get_num_cols();
+        nnz = A.get_num_nz();
+
+        // Get raw pointers to the matrix data
+        int* row_offsets = A.row_offsets.raw();
+        int* col_indices = A.col_indices.raw();
+        auto values = (float*)A.values.raw();
+
+        // Create a sparse matrix descriptor in CSR format
+        CHECK_CUSPARSE(cusparseCreateCsr(&matA,
+            num_rows, num_cols, nnz,
+            row_offsets,         // row offsets
+            col_indices,         // column indices
+            values,              // non-zero values
+            CUSPARSE_INDEX_32I,  // index type for row offsets
+            CUSPARSE_INDEX_32I,  // index type for column indices
+            CUSPARSE_INDEX_BASE_ZERO, // base index (0 or 1)
+            CUDA_R_32F           // data type of values
+        ));
+
+        // Create dense vector descriptors if not already created
+        if (!vecX) {
+            CHECK_CUSPARSE(cusparseCreateDnVec(&vecX, num_cols, nullptr, CUDA_R_32F));
+        }
+        if (!vecY) {
+            CHECK_CUSPARSE(cusparseCreateDnVec(&vecY, num_rows, nullptr, CUDA_R_32F));
+        }
+
+        // Determine the size of the temporary buffer
+        float alpha = 1.0f;
+        float beta = 0.0f;
+
+        CHECK_CUSPARSE(cusparseSpMV_bufferSize(
+            handle,
+            CUSPARSE_OPERATION_NON_TRANSPOSE,
+            &alpha,
+            matA,
+            vecX,
+            &beta,
+            vecY,
+            CUDA_R_32F,
+            CUSPARSE_SPMV_ALG_DEFAULT,
+            &bufferSize
+        ));
+
+        // Allocate the buffer
+        cudaMalloc(&dBuffer, bufferSize);
+
+        cusparseSpMV_preprocess(handle,
+                        CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &alpha,
+                        matA,  // non-const descriptor supported
+                        vecX,  // non-const descriptor supported
+                        &beta,
+                        vecY,
+                        CUDA_R_32F,
+                        CUSPARSE_SPMV_ALG_DEFAULT,
+                        dBuffer);
+
+
+        matrix_set = true;
+    }
+
+    void axpy(float* d_x, float* d_y, float alpha, float beta) {
+        if (!matrix_set) {
+            throw std::runtime_error("Matrix is not set. Call set_matrix() before using operator().");
+        }
+        // Update the input and output vector pointers
+        CHECK_CUSPARSE(cusparseDnVecSetValues(vecX, (void*)d_x));
+        CHECK_CUSPARSE(cusparseDnVecSetValues(vecY, (void*)d_y));
+
+        // Perform SpMV
+        CHECK_CUSPARSE(cusparseSpMV(
+            handle,
+            CUSPARSE_OPERATION_NON_TRANSPOSE,
+            &alpha,
+            matA,
+            vecX,
+            &beta,
+            vecY,
+            CUDA_R_32F,
+            CUSPARSE_SPMV_ALG_DEFAULT,
+            dBuffer
+        ));
+    }
+
+private:
+    cusparseSpMatDescr_t matA;
+    cusparseDnVecDescr_t vecX, vecY;
+    void* dBuffer;
+    size_t bufferSize;
+    cusparseHandle_t handle;
+    int num_rows, num_cols, nnz;
+    bool matrix_set;
+};
 
 //data structure that manages the krylov vectors and takes care of all the modulo calculation etc.
 template <class TConfig>
@@ -149,7 +390,7 @@ class KrylovSubspaceBuffer
     public:
         typedef Vector<TConfig> VVector;
 
-        KrylovSubspaceBuffer(): V_matrix(10200, 251), H_Matrix(251, 251), new_basis(10200){
+        KrylovSubspaceBuffer(): V_matrix(10200, 250), H_Matrix(251, 251), new_basis(10200){
             this->N = 0;
             printf("Making Krylov Buffer\n");
         }
@@ -223,24 +464,17 @@ class FGMRES_Solver : public Solver<T_Config>
         int m_krylov_size;
         bool use_preconditioner;
         bool use_scalar_L2_norm;
-        bool update_x_every_iteration; // x is solution
-        bool update_r_every_iteration; // r is residual
         Solver<T_Config> *m_preconditioner;
 
+        SpmvAxpy<T_Config> sp_axpy = SpmvAxpy<T_Config>();
         //DEVICE WORKSPACE
         KrylovSubspaceBuffer<T_Config> subspace;
-
-        //HOST WORKSPACE
-        //TODO: move those to device
-        // cusp::array2d<ValueTypeB, cusp::host_memory, cusp::column_major> m_H; //Hessenberg matrix
-        // cusp::array1d<ValueTypeB, cusp::host_memory> m_s; // rotated right-hand side vector, size=m+1
-        // cusp::array1d<ValueTypeB, cusp::host_memory> m_cs; // Givens rotation cosine
-        // cusp::array1d<ValueTypeB, cusp::host_memory> m_sn; // Givens rotation sine
-        // cusp::array1d<ValueTypeB, cusp::host_memory> gamma; // recursion for residual calculation
+        LeastSquaresSolver* lstsq_solver = nullptr;
+        thrust::device_vector<float> e_vect;
 
         ValueTypeA beta;
 
-        VVector residual; //compute the whole residual recursively
+        // VVector residual; //compute the whole residual recursively
 
         AMGX_STATUS checkConvergenceGMRES(bool check_V_0);
 

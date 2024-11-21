@@ -16,6 +16,7 @@ mamba install -c conda-forge gcc_linux-64=12 gxx_linux-64=12
 ln -s $(conda info --base)/envs/$CONDA_DEFAULT_ENV/bin/x86_64-conda_cos6-linux-gnu-gcc $(conda info --base)/envs/$CONDA_DEFAULT_ENV/bin/gcc
 ln -s $(conda info --base)/envs/$CONDA_DEFAULT_ENV/bin/x86_64-conda_cos6-linux-gnu-g++ $(conda info --base)/envs/$CONDA_DEFAULT_ENV/bin/g++
 
-Fix CXXFLAGS
+Installing on Cuda 12.6:
+mamba install cuda -c nvidia -c conda-forge
 export CXXFLAGS="-fvisibility-inlines-hidden -fmessage-length=0 -march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-strong -fno-plt -O2 -ffunction-sections -pipe -isystem /home/maccyz/miniforge3/envs/amgx3/include"
 
