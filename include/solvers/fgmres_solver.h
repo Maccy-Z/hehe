@@ -40,7 +40,7 @@ class CudaMatrix {
          */
         CudaMatrix(int rows, int cols)
             : rows_(rows), cols_(cols), d_matrix_(nullptr)
-        {   printf("Making cuda matrix \n");
+        {
             size_t size = static_cast<size_t>(rows_) * cols_ * sizeof(float);
             // Allocate device memory
             cudaMalloc(reinterpret_cast<void**>(&d_matrix_), size);
@@ -165,6 +165,7 @@ class CudaMatrix {
         float* d_matrix_; // Device pointer to the matrix
 };
 
+
 class LeastSquaresSolver {
 public:
     LeastSquaresSolver(cusolverDnHandle_t cusolverH, cublasHandle_t cublasH,
@@ -181,9 +182,21 @@ public:
     }
 
     void lstsq_solve(float* d_A, float* d_b) {
+
+    // using Clock = std::chrono::steady_clock;
+    // using TimePoint = std::chrono::time_point<Clock>;
+    // using Duration = std::chrono::duration<double, std::milli>; // milliseconds
+    // TimePoint start, end;
+    // Duration duration;
+    //
+    // cudaDeviceSynchronize();
+    // start = Clock::now();
+
     // Compute QR factorization
     cusolverDnSgeqrf(cusolverH_, m_, n_, d_A, m_, d_tau_,
                      d_work_, lwork_, devInfo_);
+
+
 
     // Compute Q^T * b
     cusolverDnSormqr(cusolverH_, CUBLAS_SIDE_LEFT, CUBLAS_OP_T,
@@ -199,6 +212,11 @@ public:
     CUBLAS_CHECK(cublasStrsm(cublasH_, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_UPPER,
                 CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
                 n_, nrhs, &alpha, d_A, m_, d_b, m_));
+
+    // cudaDeviceSynchronize();
+    // end = Clock::now();
+    // duration = end - start;
+    // std::cout << "lstsq " << duration.count() << " ms\n";
     }
 
 private:
@@ -390,30 +408,23 @@ class KrylovSubspaceBuffer
     public:
         typedef Vector<TConfig> VVector;
 
-        KrylovSubspaceBuffer(): V_matrix(10200, 250), H_Matrix(251, 251), new_basis(10200){
-            this->N = 0;
-            printf("Making Krylov Buffer\n");
-        }
+        KrylovSubspaceBuffer(){}
 
         ~KrylovSubspaceBuffer() {
-            printf("FREEING \n");
+            printf("Deleting KrylovSubspaceBuffer \n");
+            delete V_matrix;
+            delete H_Matrix;
+
         };
-        thrust::device_vector<float> new_basis;
-        CudaMatrix V_matrix;
-        CudaMatrix H_Matrix;
+        thrust::device_vector<float>* new_basis = nullptr; //new basis vector
+        CudaMatrix* V_matrix = nullptr;     //Matrix of Krylov vectors
+        CudaMatrix* H_Matrix = nullptr;     //Matrix of Hessenberg matrix
         int iteration;
 
-        void setup(int N, int blockdim, int tag);
+        void setup(int N_dim, int restart_iters);
 
     private:
-        // std::vector<VVector *> m_V_vector;
-        //std::vector<VVector *> m_Z_vector;
-
-        // int dimension;
-        // int max_dimension;
-        int N, tag, blockdim;
-
-        bool increase_dimension();
+        int N_dim, restart_iters;
 };
 
 
@@ -460,8 +471,8 @@ class FGMRES_Solver : public Solver<T_Config>
 
     private:
 
-        int m_R;  //Iterations between restarts, do we still need restart?
-        int m_krylov_size;
+        int m_restart;  //Iterations between restarts, do we still need restart?
+        int m_dim;      //Dimension of problem to solve
         bool use_preconditioner;
         bool use_scalar_L2_norm;
         Solver<T_Config> *m_preconditioner;
@@ -470,11 +481,9 @@ class FGMRES_Solver : public Solver<T_Config>
         //DEVICE WORKSPACE
         KrylovSubspaceBuffer<T_Config> subspace;
         LeastSquaresSolver* lstsq_solver = nullptr;
-        thrust::device_vector<float> e_vect;
+        thrust::device_vector<float>* e_vect;
 
         ValueTypeA beta;
-
-        // VVector residual; //compute the whole residual recursively
 
         AMGX_STATUS checkConvergenceGMRES(bool check_V_0);
 

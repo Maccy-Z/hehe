@@ -10,8 +10,6 @@
 #include <util.h>
 #include <cusp/blas.h>
 #include <solvers/fgmres_solver.h>
-#include <thrust/transform.h>
-#include <thrust/functional.h>
 #include "solvers/fgmres_utils.h"
 
 //TODO remove synchronization from this module by moving host operations to the device
@@ -22,18 +20,21 @@ namespace amgx
 
 //init the frist vector
 template <class TConfig>
-void KrylovSubspaceBuffer<TConfig>::setup(int N, int blockdim, int tag)
+void KrylovSubspaceBuffer<TConfig>::setup(int N_dim, int restart_iters)
 {
-    this->N = N;
-    this->blockdim = blockdim;
-    this->tag = tag;
+    new_basis = new thrust::device_vector<float>(N_dim);
+    V_matrix = new CudaMatrix(N_dim, restart_iters);
+    H_Matrix = new CudaMatrix(restart_iters+1, restart_iters+1);
+
+    this->N_dim = N_dim;
+    this->restart_iters = restart_iters;
     this->iteration = -1;
 }
 
 
 template< class T_Config>
 FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_scope ) :
-    Solver<T_Config>(cfg, cfg_scope), m_preconditioner(0), e_vect(251)
+    Solver<T_Config>(cfg, cfg_scope), m_preconditioner(0)
 
 {
     std::string solverName, new_scope, tmp_scope;
@@ -47,23 +48,18 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     else
     {
         use_preconditioner = true;
-        m_preconditioner = SolverFactory<T_Config>::allocate(cfg, cfg_scope, "preconditioner");
+        m_preconditioner = SolverFactory<T_Config>::allocate( cfg, cfg_scope, "preconditioner" );
     }
 
-    m_R = cfg.AMG_Config::template getParameter<int>("gmres_n_restart", cfg_scope);
-    m_krylov_size = std::min(this->m_max_iters, m_R);
-    int krylov_param = cfg.AMG_Config::template getParameter<int>("gmres_krylov_dim", cfg_scope);
+    m_restart = cfg.AMG_Config::template getParameter<int>("gmres_n_restart", cfg_scope);
 
-    if (krylov_param > 0)
-    {
-        m_krylov_size = std::min(m_krylov_size, krylov_param);
-    }
+    e_vect = new thrust::device_vector<float>(m_restart+1);
 
     // Init least squares solver
     cublasHandle_t handle_cublas = Cublas::get_handle();
     cusolverDnHandle_t hanlde_cusolver = nullptr;
     cusolverDnCreate(&hanlde_cusolver);
-    lstsq_solver = new LeastSquaresSolver(hanlde_cusolver, handle_cublas, 251, 250);
+    lstsq_solver = new LeastSquaresSolver(hanlde_cusolver, handle_cublas, m_restart+1, m_restart);
 }
 
 template<class T_Config>
@@ -71,13 +67,14 @@ FGMRES_Solver<T_Config>::~FGMRES_Solver()
 {
     if (use_preconditioner) { delete m_preconditioner; }
     delete lstsq_solver;
+    delete e_vect;
 }
 
 template<class T_Config>
 void
 FGMRES_Solver<T_Config>::printSolverParameters() const
 {
-    std::cout << "gmres_n_restart=" << this->m_R << std::endl;
+    std::cout << "gmres_n_restart=" << this->m_restart << std::endl;
 
     if (use_preconditioner)
     {
@@ -99,8 +96,8 @@ FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
     //should we warn the user about the extra computational work?
     // printf("m_nrm.size() = %d, m_use_scalar_norm = %d, m_norm_type = %d\n", this->m_nrm.size(), this->m_use_scalar_norm, this->m_norm_type);
     use_scalar_L2_norm = (this->m_nrm.size() == 1 || this->m_use_scalar_norm) && this->m_norm_type == L2;
-    subspace.setup(this->m_A->get_num_cols()*this->m_A->get_block_dimy(), this->m_A->get_block_dimy(), this->tag);
-    // residual.tag = (this->tag + 1) * 100 - 2;
+    m_dim = this->m_A->get_num_cols();
+    subspace.setup(this->m_A->get_num_cols(), this->m_restart);
 
     this->m_A->setView(oldView);
 }
@@ -125,39 +122,42 @@ template<class T_Config>
 AMGX_STATUS
 FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 {
-    using Clock = std::chrono::steady_clock;
+    /*using Clock = std::chrono::steady_clock;
     using TimePoint = std::chrono::time_point<Clock>;
     using Duration = std::chrono::duration<double, std::milli>; // milliseconds
     TimePoint start, end;
     Duration duration;
 
+
+    cudaDeviceSynchronize();
+    start = Clock::now();
+    cudaDeviceSynchronize();
+    end = Clock::now();
+    duration = end - start;
+    std::cout << "main time: " << duration.count() << " ms\n";*/
+
     // AMGX_STATUS conv_stat = AMGX_ST_CONVERGED;
     cublasHandle_t cublas_handle = Cublas::get_handle();
 
-    // Operator<T_Config> &A = *this->m_A;
-    int m = this->m_curr_iter % m_R;
+    int m = this->m_curr_iter % m_restart;  //Iterations between restarts, do we still need restart?
 
-    auto new_basis = subspace.new_basis;
+    auto& new_basis = *subspace.new_basis;
     float* new_basis_ptr = thrust::raw_pointer_cast(new_basis.data());
-    auto& V = subspace.V_matrix;
-    auto& H = subspace.H_Matrix;
-    float* e_vect_ptr = thrust::raw_pointer_cast(e_vect.data());
-    float* x_ptr = (float*) thrust::raw_pointer_cast(x.data());
+    auto& V = *subspace.V_matrix;
+    auto& H = *subspace.H_Matrix;
+    float* e_vect_ptr = thrust::raw_pointer_cast(e_vect->data());
+    auto* x_ptr = (float*)thrust::raw_pointer_cast(x.data());
 
     // A matrix
     auto& A = dynamic_cast<Matrix<T_Config>&>(*this->m_A);
-    if (m == 0)
-    {
-        sp_axpy.set_matrix(A);
-    }
 
     if (m == 0){
         //initialize gmres
-        //subspace.set_iteration(0);
+        // A never ever changes, but set once per iteration anyway.
+        sp_axpy.set_matrix(A);
+
         subspace.iteration = 0;
         // compute initial residual r0 = b - Ax
-        float* x_ptr = (float*) x.raw();
-
         thrust::copy(b.begin(), b.end(), new_basis.begin());
         sp_axpy.axpy(x_ptr, new_basis_ptr, -1.0f, 1.0f);
 
@@ -167,10 +167,12 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
         V.setColumn(m, new_basis_ptr);
 
         // e = [beta, 0, 0, ...]
-        thrust::fill(e_vect.begin(), e_vect.end(), 0);
+        thrust::fill(e_vect->begin(), e_vect->end(), 0);
         cudaMemcpy(e_vect_ptr, beta, sizeof(float), cudaMemcpyDeviceToDevice);
 
     }
+
+
     // Copy new_basis into V
     subspace.iteration = m;
 
@@ -180,20 +182,18 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     //obtain v_m+1 := A*z_m
     sp_axpy.axpy(V.getColPtr(m), new_basis_ptr, 1.0f, 0.0f);
 
-    // start = Clock::now();
 
-    gram_schmidt_step(V.getColPtr(0), 10200, m, H.getDevicePointer(), 251, new_basis_ptr);
-    // cudaDeviceSynchronize() ;
-    // end = Clock::now();
-    // duration = end - start;
-    // std::cout << "Block 1 took " << duration.count() << " ms\n";
+    // Compute next vector in the basis using Gram Schmidt and entry in Hessenberg matrix
+    gram_schmidt_step(V.getColPtr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
+
+
     //H(m+1,m) = || v_m+1 ||
     float* norm = compute_L2_norm(new_basis);
     H.set_element_device(m+1, m, norm);
     // //normalize v_m+1
     scale_vector(new_basis, norm);
 
-    if (m < 249)
+    if (m < m_restart-1)
     {
         V.setColumn(m+1, new_basis_ptr);
     }
@@ -202,16 +202,11 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 
     // // If reached restart limit or last iteration or if converged, compute x vector
     //    if ( !update_x_every_iteration && (m == m_R - 1 || this->is_last_iter() || isDone(conv_stat) ))
-    if (this->is_last_iter() || m == m_R - 1 )
-    {   // printf("m = %d, m_R = %d, is_last_iter = %d, isDone = %d\n", m, m_R, this->is_last_iter(), isDone(conv_stat));
-        // Solve Hessenberg system
-        // printf("\nm = %d, current iter = %d\n", m, this->m_curr_iter);
-        // //    Update the solution
-        // // This is dense M-V,
-        // printf("\nLast Iteration\n");
-        // printf("m = %d\n", m);
+    if (this->is_last_iter() || m == m_restart - 1 )
+    {
 
         lstsq_solver->lstsq_solve(H.getDevicePointer(), e_vect_ptr);
+
 
         const float one = 1.0f;
         // x = x + A e_vect

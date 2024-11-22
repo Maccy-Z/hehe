@@ -14,6 +14,8 @@ exit(EXIT_FAILURE); \
 }
 
 namespace amgx{
+
+
 template <typename T>
 void printvec(T* d_vec, int size) {
     T *h_vec = new T[size]; // Host vector
@@ -140,6 +142,7 @@ void gram_schmidt_step(T* V, int n, int m, T* H, int ldH, T* Vm1) {
                 &one,                    // Scalar beta
                 Vm1,                     // Vector Vm1 (updated in-place)
                 1);                      // Increment for Vm1
+
 }
 
 }
