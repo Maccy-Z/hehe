@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include <amgx_cublas.h>
+//#include <amgx_cublas.h>
 #include <blas.h>
 #include <chrono>
 #include <cutil.h>
 #include <norm.h>
 #include <util.h>
 #include <cusp/blas.h>
-#include <solvers/fgmres_solver.h>
 #include "solvers/fgmres_utils.h"
+#include <solvers/fgmres_solver.h>
 
 //TODO remove synchronization from this module by moving host operations to the device
 
@@ -68,6 +68,8 @@ FGMRES_Solver<T_Config>::~FGMRES_Solver()
     if (use_preconditioner) { delete m_preconditioner; }
     delete lstsq_solver;
     delete e_vect;
+    delete v_m_vvect;
+    delete p_inv_v_m;
 }
 
 template<class T_Config>
@@ -95,27 +97,17 @@ FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
     this->m_A->setViewExterior();
     //should we warn the user about the extra computational work?
     // printf("m_nrm.size() = %d, m_use_scalar_norm = %d, m_norm_type = %d\n", this->m_nrm.size(), this->m_use_scalar_norm, this->m_norm_type);
-    use_scalar_L2_norm = (this->m_nrm.size() == 1 || this->m_use_scalar_norm) && this->m_norm_type == L2;
+    // use_scalar_L2_norm = (this->m_nrm.size() == 1 || this->m_use_scalar_norm) && this->m_norm_type == L2;
     m_dim = this->m_A->get_num_cols();
     subspace.setup(this->m_A->get_num_cols(), this->m_restart);
 
     this->m_A->setView(oldView);
+
+    // Initialize temp vvects
+    v_m_vvect = new VVector(m_dim);
+    p_inv_v_m = new VVector(m_dim);
+
 }
-
-template<class T_Config>
-void
-FGMRES_Solver<T_Config>::solve_init( VVector &b, VVector &x, bool xIsZero )
-{
-    //init residual, even if we don't plan to use it, we might need it, so make sure we have enough memory to store it now
-    // residual.resize( b.size() );
-    // residual.set_block_dimx( 1 );
-    // residual.set_block_dimy( this->m_A->get_block_dimy() );
-    // residual.dirtybit = 1;
-    // residual.delayed_send = 1;
-}
-
-
-
 
 //Run preconditioned GMRES
 template<class T_Config>
@@ -175,11 +167,38 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     // Copy new_basis into V
     subspace.iteration = m;
 
+    // V_m has been set.
+    // new_basis_ptr treated as NULL;
+
     // Run one iteration of preconditioner with zero initial guess and v_m as rhs, i.e. solve Az_m=v_m
     // copy(subspace.V(m), subspace.Z(m), offset, size);
+    // auto v_m_vvector = VVector();
+
+    // Print out b stats
+    if (use_preconditioner)
+    {
+        printf("\n m = %d \n", m);
+        ptr_to_vvector(V.getColPtr(m), m_dim, *v_m_vvect);
+
+        thrust::fill((*p_inv_v_m).begin(), (*p_inv_v_m).end(), 0.0f);
+        m_preconditioner->solve( *v_m_vvect, *p_inv_v_m, true ); //TODO: check if using zero as initial solution when solving for residual inside subspace is correct
+
+        // V.setColumn(m, (float*) (*p_inv_v_m).raw());
+        printvec((*p_inv_v_m).raw(), 10);
+
+        sp_axpy.axpy((float*) (*p_inv_v_m).raw(), new_basis_ptr, 1.0f, 0.0f);
+        // std::exit(9);
+        printvec(new_basis_ptr, 10);
+
+    } else
+    {
+        sp_axpy.axpy(V.getColPtr(m), new_basis_ptr, 1.0f, 0.0f);
+
+        printvec(new_basis_ptr, 10);
+    }
+
 
     //obtain v_m+1 := A*z_m
-    sp_axpy.axpy(V.getColPtr(m), new_basis_ptr, 1.0f, 0.0f);
 
 
     // Compute next vector in the basis using Gram Schmidt and entry in Hessenberg matrix
@@ -225,16 +244,8 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
         );
 
 
-        // printvec(x_ptr, 10);
-
-
     }
-    //
-    //
-    // A.setView(oldView);
-    //
-    //
-    // std::exit(69);
+
     cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST);
     return AMGX_ST_NOT_CONVERGED;
     //return Base::m_monitor_convergence ? conv_stat : AMGX_ST_CONVERGED;

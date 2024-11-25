@@ -409,7 +409,7 @@ class Vector<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> > : pu
         typedef typename MemorySpaceMap<AMGX_host>::Type host_memory;
         typedef typename MemorySpaceMap<AMGX_device>::Type device_memory;
     public:
-        static constexpr const char* my_id = "DeviceVector";
+        static constexpr auto my_id = "DeviceVector";
 
         typedef TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec> TConfig;
         typedef TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec> TConfig_h;

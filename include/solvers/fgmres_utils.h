@@ -1,3 +1,5 @@
+#include <amgx_cublas.h>
+
 #define CUDA_CHECK(err) \
 if (err != cudaSuccess) { \
 std::cerr << "CUDA Error: " << cudaGetErrorString(err) \
@@ -142,6 +144,36 @@ void gram_schmidt_step(T* V, int n, int m, T* H, int ldH, T* Vm1) {
                 &one,                    // Scalar beta
                 Vm1,                     // Vector Vm1 (updated in-place)
                 1);                      // Increment for Vm1
+
+}
+
+template <AMGX_VecPrecision t_vecPrec, AMGX_MatPrecision t_matPrec, AMGX_IndPrecision t_indPrec>
+void ptr_to_vvector(float* d_x, int size, Vector<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec>>& vec)
+{
+    // These don't need to be set
+    // auto rows = vec.get_num_rows();  = 0
+    // auto cols = vec.get_num_cols();  = 1
+    // auto lda = vec.get_lda();  = 0
+    // auto dimx = vec.get_block_dimx();  = 1
+    // auto dimy = vec.get_block_dimy();  = 1
+    // auto bs = vec.get_block_size();  = 1
+    // auto size = vec.size(); = m_dim
+    //printf("rows = %d, cols = %d, lda = %d, dimx = %d, dimy = %d, bs = %d, size = %d\n", rows, cols, lda, dimx, dimy, bs, size);
+
+
+    float* d_thrust_vec = (float*) vec.raw();
+    cudaMemcpy(d_thrust_vec, d_x, size * sizeof(float), cudaMemcpyDeviceToDevice);
+
+    // vec.resize(size, sizeof(float));
+    // vec.assign(d_x, d_x + size * sizeof(float));
+
+}
+
+template <AMGX_VecPrecision t_vecPrec, AMGX_MatPrecision t_matPrec, AMGX_IndPrecision t_indPrec>
+void ptr_to_vvector(float* d_x, int size, amgx::Vector<amgx::TemplateConfig<AMGX_host, t_vecPrec, t_matPrec, t_indPrec>>& vec)
+{
+
+    std::exit(123);
 
 }
 
