@@ -172,7 +172,6 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 
     }
 
-
     // Copy new_basis into V
     subspace.iteration = m;
 
