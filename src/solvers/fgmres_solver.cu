@@ -9,7 +9,7 @@
 #include <norm.h>
 #include <util.h>
 #include <cusp/blas.h>
-#include "solvers/fgmres_utils.h"
+// #include "solvers/fgmres_utils.h"
 #include <solvers/fgmres_solver.h>
 
 //TODO remove synchronization from this module by moving host operations to the device
@@ -18,13 +18,26 @@
 namespace amgx
 {
 
+template<class T_Config>
+void
+FGMRES_Solver<T_Config>::printSolverParameters() const
+{
+    std::cout << "gmres_n_restart=" << this->m_restart << std::endl;
+
+    if (use_preconditioner)
+    {
+        std::cout << "preconditioner: " << this->m_preconditioner->getName() << " with scope name: " << this->m_preconditioner->getScope() << std::endl;
+    }
+}
+
 //init the frist vector
 template <class TConfig>
 void KrylovSubspaceBuffer<TConfig>::setup(int N_dim, int restart_iters)
-{
+{   printf("\n Setting up Krylov Subspace Buffer\n");
     new_basis = new thrust::device_vector<float>(N_dim);
     V_matrix = new CudaMatrix(N_dim, restart_iters);
-    H_Matrix = new CudaMatrix(restart_iters+1, restart_iters+1);
+    Z_matrix = new CudaMatrix(N_dim, restart_iters);
+    H_Matrix = new CudaMatrix(restart_iters+1, restart_iters);
 
     this->N_dim = N_dim;
     this->restart_iters = restart_iters;
@@ -37,6 +50,7 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     Solver<T_Config>(cfg, cfg_scope), m_preconditioner(0)
 
 {
+    printf("\nMaking New GMRES Solver\n");
     std::string solverName, new_scope, tmp_scope;
     cfg.getParameter<std::string>("preconditioner", solverName, cfg_scope, new_scope);
 
@@ -60,6 +74,12 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     cusolverDnHandle_t hanlde_cusolver = nullptr;
     cusolverDnCreate(&hanlde_cusolver);
     lstsq_solver = new LeastSquaresSolver(hanlde_cusolver, handle_cublas, m_restart+1, m_restart);
+
+    // Gram schmidt solver
+    auto gs_params = cfg.getParameter<std::string>("gram_schmidt_options", cfg_scope);
+    GS_solver = new GramSchmidtSolver(m_restart+2, gs_params);
+
+    CUDA_CHECK(cudaMalloc((void**)&d_norm_tmp, sizeof(float)));
 }
 
 template<class T_Config>
@@ -70,24 +90,14 @@ FGMRES_Solver<T_Config>::~FGMRES_Solver()
     delete e_vect;
     delete v_m_vvect;
     delete p_inv_v_m;
+    cudaFree(d_norm_tmp);
+    delete GS_solver;
 }
 
-template<class T_Config>
-void
-FGMRES_Solver<T_Config>::printSolverParameters() const
-{
-    std::cout << "gmres_n_restart=" << this->m_restart << std::endl;
-
-    if (use_preconditioner)
-    {
-        std::cout << "preconditioner: " << this->m_preconditioner->getName() << " with scope name: " << this->m_preconditioner->getScope() << std::endl;
-    }
-}
 
 template<class T_Config>
-void
-FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
-{
+void FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
+{   /* This runs every time the solver is called */
     if (use_preconditioner)
     {
         m_preconditioner->setup( *this->m_A, reuse_matrix_structure );
@@ -95,18 +105,30 @@ FGMRES_Solver<T_Config>::solver_setup(bool reuse_matrix_structure)
 
     ViewType oldView = this->m_A->currentView();
     this->m_A->setViewExterior();
-    //should we warn the user about the extra computational work?
-    // printf("m_nrm.size() = %d, m_use_scalar_norm = %d, m_norm_type = %d\n", this->m_nrm.size(), this->m_use_scalar_norm, this->m_norm_type);
-    // use_scalar_L2_norm = (this->m_nrm.size() == 1 || this->m_use_scalar_norm) && this->m_norm_type == L2;
-    m_dim = this->m_A->get_num_cols();
-    subspace.setup(this->m_A->get_num_cols(), this->m_restart);
 
+    int dim = this->m_A->get_num_cols();
     this->m_A->setView(oldView);
 
-    // Initialize temp vvects
-    v_m_vvect = new VVector(m_dim);
-    p_inv_v_m = new VVector(m_dim);
+    // Setup subspace if it isn't already setup
+    if (m_dim != dim)
+    {
+        if (m_dim != 0)
+        {
+            // Need to delete old objects
+            subspace = KrylovSubspaceBuffer<T_Config>();
+            if (use_preconditioner){delete v_m_vvect; delete p_inv_v_m;}
+        }
+        m_dim = dim;
+        subspace.setup(this->m_A->get_num_cols(), this->m_restart);
 
+        // Initialize temp vvects
+        if (use_preconditioner)
+        {
+            v_m_vvect = new VVector(m_dim);
+            p_inv_v_m = new VVector(m_dim);
+        }
+    }
+    // TODO: Zero matrices?
 }
 
 //Run preconditioned GMRES
@@ -135,10 +157,11 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 
     auto& new_basis = *subspace.new_basis;
     float* new_basis_ptr = thrust::raw_pointer_cast(new_basis.data());
-    auto& V = *subspace.V_matrix;
-    auto& H = *subspace.H_Matrix;
     float* e_vect_ptr = thrust::raw_pointer_cast(e_vect->data());
     auto* x_ptr = (float*)thrust::raw_pointer_cast(x.data());
+    auto& V = *subspace.V_matrix;
+    auto& Z = *subspace.Z_matrix;
+    auto& H = *subspace.H_Matrix;
 
     // A matrix
     auto& A = dynamic_cast<Matrix<T_Config>&>(*this->m_A);
@@ -153,96 +176,77 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
         thrust::copy(b.begin(), b.end(), new_basis.begin());
         sp_axpy.axpy(x_ptr, new_basis_ptr, -1.0f, 1.0f);
 
-        // normalize initial residual
-        float* beta = compute_L2_norm(new_basis);
-        scale_vector(new_basis, beta);
-        V.setColumn(m, new_basis_ptr);
+        // normalize initial residual. d_norm_tmp = beta = ||r0||
+        compute_L2_norm(new_basis, d_norm_tmp);
+        scale_vector(new_basis, d_norm_tmp);
+        V.setColumn(0, new_basis_ptr);
 
         // e = [beta, 0, 0, ...]
         thrust::fill(e_vect->begin(), e_vect->end(), 0);
-        cudaMemcpy(e_vect_ptr, beta, sizeof(float), cudaMemcpyDeviceToDevice);
-
+        cudaMemcpy(e_vect_ptr, d_norm_tmp, sizeof(float), cudaMemcpyDeviceToDevice);
     }
 
-    // Copy new_basis into V
     subspace.iteration = m;
 
-    // V_m has been set.
-    // new_basis_ptr treated as NULL;
-
-    // Run one iteration of preconditioner with zero initial guess and v_m as rhs, i.e. solve Az_m=v_m
-    // copy(subspace.V(m), subspace.Z(m), offset, size);
-    // auto v_m_vvector = VVector();
-
-    // Print out b stats
+    // Compute current vector from V[m].
     if (use_preconditioner)
-    {
-        printf("\n m = %d \n", m);
-        ptr_to_vvector(V.getColPtr(m), m_dim, *v_m_vvect);
-
-        thrust::fill((*p_inv_v_m).begin(), (*p_inv_v_m).end(), 0.0f);
+{       // Run one iteration of preconditioner with zero initial guess and v_m as rhs, i.e. solve Az_m=v_m
+        // Copy cuda array into VVector
+        cudaMemcpy(v_m_vvect->raw(), new_basis_ptr, m_dim * sizeof(float), cudaMemcpyDeviceToDevice);
+        thrust::fill((*p_inv_v_m).begin(), (*p_inv_v_m).end(), 0);
+        // Solve for p_inv_v_m = P^-1 * v_m
         m_preconditioner->solve( *v_m_vvect, *p_inv_v_m, true ); //TODO: check if using zero as initial solution when solving for residual inside subspace is correct
 
-        // V.setColumn(m, (float*) (*p_inv_v_m).raw());
-        printvec((*p_inv_v_m).raw(), 10);
-
-        sp_axpy.axpy((float*) (*p_inv_v_m).raw(), new_basis_ptr, 1.0f, 0.0f);
-        // std::exit(9);
-        printvec(new_basis_ptr, 10);
+        Z.setColumn(m, (float*) p_inv_v_m->raw());
 
     } else
-    {
-        sp_axpy.axpy(V.getColPtr(m), new_basis_ptr, 1.0f, 0.0f);
-
-        printvec(new_basis_ptr, 10);
+    {   // Do nothing to get V[m]
+        Z.setColumn(m, new_basis_ptr);
     }
 
-
+    // new_basis is now V_m
     //obtain v_m+1 := A*z_m
+    sp_axpy.axpy(Z.get_col_ptr(m), new_basis_ptr, 1.0f, 0.0f);
 
-
-    // Compute next vector in the basis using Gram Schmidt and entry in Hessenberg matrix
-    gram_schmidt_step(V.getColPtr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
-
+    // Compute entry in Hessenberg matrix and new residual vector.
+    // gram_schmidt_step(V.get_col_ptr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
+    GS_solver->gram_schmidt(V.get_col_ptr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
 
     //H(m+1,m) = || v_m+1 ||
-    float* norm = compute_L2_norm(new_basis);
-    H.set_element_device(m+1, m, norm);
+    compute_L2_norm(new_basis, d_norm_tmp);
+    H.set_element_device(m+1, m, d_norm_tmp);
     // //normalize v_m+1
-    scale_vector(new_basis, norm);
+    scale_vector(new_basis, d_norm_tmp);
 
     if (m < m_restart-1)
     {
         V.setColumn(m+1, new_basis_ptr);
     }
 
-
-
     // // If reached restart limit or last iteration or if converged, compute x vector
     //    if ( !update_x_every_iteration && (m == m_R - 1 || this->is_last_iter() || isDone(conv_stat) ))
     if (this->is_last_iter() || m == m_restart - 1 )
     {
-
+        // H u = e
         lstsq_solver->lstsq_solve(H.getDevicePointer(), e_vect_ptr);
+        // printvec(e_vect_ptr, m_restart+1, "\ne_vect");
 
-
-        const float one = 1.0f;
-        // x = x + A e_vect
+        // x = x + Z * u
+        constexpr float one = 1.0f;
         cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST);
         cublasSgemv(cublas_handle,
                     CUBLAS_OP_N, // No transpose
-                    V.getRows(),           // Number of rows of A
-                    V.getCols(),           // Number of columns of A
+                    Z.getRows(),           // Number of rows of A
+                    Z.getCols(),           // Number of columns of A
                     &one,      // alpha
-                    V.getDevicePointer(),         // A
-                    V.getRows(),           // leading dimension of A
+                    Z.getDevicePointer(),         // A
+                    Z.getRows(),           // leading dimension of A
                     e_vect_ptr,         // y
                     1,           // stride of y
                     &one,       // beta
                     x_ptr,         // x
                     1            // stride of x
         );
-
 
     }
 

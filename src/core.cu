@@ -535,6 +535,11 @@ inline void registerParameters()
     AMG_Config::registerParameter<int>("obtain_timings", "flag that cause the solvers to print total setup and solve times <0|1>", 0);
     AMG_Config::registerParameter<int>("store_res_history", "flag that allows to store the residual history of a solver solver <0|1>", 0);
     AMG_Config::registerParameter<int>("convergence_analysis", "number of levels that will be analysed. 0=no analysis, 1=only finest, 2=finest and second finest etc. <0>", 0);
+
+    /* CUSTOM OPTIONS*/
+    std::vector<std::string> myVector = {"NORMAL", "MODIFIED", "REORTHOGONALIZED"};
+    AMG_Config::registerParameter<std::string>("gram_schmidt_options", "asdfasdf <0>", "NORMAL", myVector);
+
     // Register Matrix scaling parameters
     std::vector<std::string> scaler_values = getAllScalers();
     scaler_values.push_back("NONE");
