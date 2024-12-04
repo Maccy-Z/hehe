@@ -49,7 +49,7 @@ class CudaMatrix {
          * @brief Destructor that frees the device memory.
          */
         ~CudaMatrix()
-        {   printf("Deleting cuda matrix\n");
+        {   printf("-Deleting cuda matrix-");
             if (d_matrix_) {
                 cudaFree(d_matrix_);
                 d_matrix_ = nullptr;
@@ -407,7 +407,7 @@ class GramSchmidtSolver {
 
         // Destructor: Frees the allocated buffer
         ~GramSchmidtSolver() {
-            printf("Deleting Gram Schmidt Solver\n");
+            printf("-Deleting Gram Schmidt Solver-");
             if (d_H_col_new_) {
                 cudaFree(d_H_col_new_);
                 d_H_col_new_ = nullptr;

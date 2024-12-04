@@ -33,7 +33,8 @@ FGMRES_Solver<T_Config>::printSolverParameters() const
 //init the frist vector
 template <class TConfig>
 void KrylovSubspaceBuffer<TConfig>::setup(int N_dim, int restart_iters)
-{   printf("\n Setting up Krylov Subspace Buffer\n");
+{
+    // printf("\n Setting up Krylov Subspace Buffer\n");
     new_basis = new thrust::device_vector<float>(N_dim);
     V_matrix = new CudaMatrix(N_dim, restart_iters);
     Z_matrix = new CudaMatrix(N_dim, restart_iters);
@@ -50,7 +51,7 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     Solver<T_Config>(cfg, cfg_scope), m_preconditioner(0)
 
 {
-    printf("\nMaking New GMRES Solver\n");
+    // printf("\nMaking New GMRES Solver\n");
     std::string solverName, new_scope, tmp_scope;
     cfg.getParameter<std::string>("preconditioner", solverName, cfg_scope, new_scope);
 

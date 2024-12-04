@@ -25,7 +25,7 @@ class KrylovSubspaceBuffer
         KrylovSubspaceBuffer(){}
 
         ~KrylovSubspaceBuffer() {
-            printf("Deleting KrylovSubspaceBuffer \n");
+            printf("-Deleting KrylovSubspaceBuffer-");
             delete new_basis;
             delete V_matrix;
             delete Z_matrix;
