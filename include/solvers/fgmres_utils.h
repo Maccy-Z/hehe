@@ -1,3 +1,4 @@
+#pragma once
 #include <amgx_cublas.h>
 #include<cusolverDn.h>
 
@@ -63,12 +64,10 @@ class CudaMatrix {
          * @param device_data Pointer to the device data array of size `rows_`.
          */
         void setColumn(int col_idx, const float* device_data){
-            if (col_idx < 0 || col_idx >= cols_) {
-                std::cerr << "Error: Column index out of bounds in setColumn()." << std::endl;
-                exit(EXIT_FAILURE);
-            }
-            // printf("rows: %d, cols: %d\n", rows_, cols_);
-            // std::exit(9);
+            // if (col_idx < 0 || col_idx >= cols_) {
+            //     std::cerr << "Error: Column index out of bounds in setColumn()." << std::endl;
+            //     exit(EXIT_FAILURE);
+            // }
             // Calculate the device pointer to the start of the specified column
             float* d_col_ptr = d_matrix_ + static_cast<size_t>(col_idx) * rows_;
 
@@ -83,10 +82,10 @@ class CudaMatrix {
          * @return float* Device pointer to the start of the specified column.
          */
         float* get_col_ptr(int col_idx) const{
-            if (col_idx < 0 || col_idx >= cols_) {
-                std::cerr << "Error: Column index out of bounds in getColumnPtr()." << std::endl;
-                exit(EXIT_FAILURE);
-            }
+            // if (col_idx < 0 || col_idx >= cols_) {
+            //     std::cerr << "Error: Column index out of bounds in getColumnPtr()." << std::endl;
+            //     exit(EXIT_FAILURE);
+            // }
 
             return d_matrix_ + static_cast<size_t>(col_idx) * rows_;
         }
@@ -103,10 +102,10 @@ class CudaMatrix {
         }
 
         void set_element(int row, int col, float value) {
-            if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
-                std::cerr << "Error: Row or column index out of bounds in setElement()." << std::endl;
-                exit(EXIT_FAILURE);
-            }
+            // if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+            //     std::cerr << "Error: Row or column index out of bounds in setElement()." << std::endl;
+            //     exit(EXIT_FAILURE);
+            // }
             float* d_ptr = d_matrix_ + static_cast<size_t>(col) * rows_ + row;
             cudaMemcpy(d_ptr, &value, sizeof(float), cudaMemcpyHostToDevice);
         }
@@ -202,6 +201,7 @@ inline void print_cusp_array(CudaMatrix *array) {
         std::cout << std::endl; // Newline after each row
     }
 }
+
 
 
 // CUDA kernel to compute the reciprocal of a scalar
@@ -433,7 +433,7 @@ class GramSchmidtSolver {
 
         // Reorthogonalized GS
         void gram_schmidt_reorthog(float* d_V, int n, int m, float* d_H, int ldH, float* Vm1) {
-            assert(m < m_max_ && "m exceeds preallocated buffer size.");
+           // assert(m < m_max_ && "m exceeds preallocated buffer size.");
 
             // Get cuBLAS handle
             cublasHandle_t handle = Cublas::get_handle();
@@ -459,7 +459,6 @@ class GramSchmidtSolver {
             );
 
             // Reorthogonalization step
-
             // Compute H_col_new = V^T * Vm1 using pre-allocated buffer
             CUBLAS_CHECK(
                 cublasSgemv(handle, CUBLAS_OP_T, n,m + 1, &one,d_V, n, Vm1,
