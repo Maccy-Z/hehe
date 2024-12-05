@@ -374,7 +374,7 @@ __global__ static void compute_neg_Him(const float* H_element, float* neg_Him_d)
 class GramSchmidtSolver {
     public:
         // Constructor: Initializes the buffer with size m_max
-        GramSchmidtSolver(int m_max, std::string& mode)
+        GramSchmidtSolver(int m_max, std::string& mode, int n_reorthog)
             : m_max_(m_max), d_H_col_new_(nullptr) {
 
             if (mode == "NORMAL")
@@ -390,10 +390,13 @@ class GramSchmidtSolver {
                 };
             }
             else if (mode == "REORTHOGONALIZED")
-            {   // Allocate device memory for H_col_new
+            {
+                m_reorthog = n_reorthog;
+                // Allocate device memory for H_col_new
                 CUDA_CHECK(cudaMalloc(&d_H_col_new_, sizeof(float) * m_max_));
                 // Initialize to zero (optional)
                 CUDA_CHECK(cudaMemset(d_H_col_new_, 0, sizeof(float) * m_max_));
+
                 gram_schmidt_impl_ = [this] (float* d_V, int n, int m, float* d_H, int ldH, float* Vm1) {
                     gram_schmidt_reorthog(d_V, n, m, d_H, ldH, Vm1);
                 };
@@ -427,6 +430,7 @@ class GramSchmidtSolver {
 
     private:
         int m_max_;        // Maximum m value
+        int m_reorthog = 0; // Number of reorthogonalization steps
         float* d_H_col_new_;   // Pre-allocated device buffer for H_col_new
 
         std::function<void(float* d_V, int n, int m, float* d_H, int ldH, float* Vm1)> gram_schmidt_impl_;
@@ -460,22 +464,44 @@ class GramSchmidtSolver {
 
             // Reorthogonalization step
             // Compute H_col_new = V^T * Vm1 using pre-allocated buffer
-            CUBLAS_CHECK(
-                cublasSgemv(handle, CUBLAS_OP_T, n,m + 1, &one,d_V, n, Vm1,
-                            1, &zero,d_H_col_new_,1)
-            );
+            // CUBLAS_CHECK(
+            //     cublasSgemv(handle, CUBLAS_OP_T, n,m + 1, &one,d_V, n, Vm1,
+            //                 1, &zero,d_H_col_new_,1)
+            // );
+            //
+            // // Update Vm1 = Vm1 - V * H_col_new
+            // CUBLAS_CHECK(
+            //     cublasSgemv(handle, CUBLAS_OP_N, n, m + 1, &minus_one,
+            //                 d_V,n,d_H_col_new_,1,&one, Vm1, 1)
+            // );
+            //
+            // // Update H_col += H_col_new
+            // CUBLAS_CHECK(
+            //     cublasSaxpy(handle,
+            //                 m + 1, &one,d_H_col_new_,1, H_col,1)
+            // );
 
-            // Update Vm1 = Vm1 - V * H_col_new
-            CUBLAS_CHECK(
-                cublasSgemv(handle, CUBLAS_OP_N, n, m + 1, &minus_one,
-                            d_V,n,d_H_col_new_,1,&one, Vm1, 1)
-            );
+            // Reorthogonalization steps
+            for (int i = 0; i < m_reorthog; ++i) {
+                // Compute H_col_new = V^T * Vm1
+                CUBLAS_CHECK(
+                    cublasSgemv(handle, CUBLAS_OP_T, n, m + 1, &one, d_V, n, Vm1,
+                                1, &zero, d_H_col_new_, 1)
+                );
 
-            // Update H_col += H_col_new
-            CUBLAS_CHECK(
-                cublasSaxpy(handle,
-                            m + 1, &one,d_H_col_new_,1, H_col,1)
-            );
+                // Update Vm1 = Vm1 - V * H_col_new
+                CUBLAS_CHECK(
+                    cublasSgemv(handle, CUBLAS_OP_N, n, m + 1, &minus_one,
+                                d_V, n, d_H_col_new_, 1, &one, Vm1, 1)
+                );
+
+                // Update H_col += H_col_new
+                CUBLAS_CHECK(
+                    cublasSaxpy(handle,
+                                m + 1, &one, d_H_col_new_, 1, H_col, 1)
+                );
+            }
+
         }
 
         // Modifed GS

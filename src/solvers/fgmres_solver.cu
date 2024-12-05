@@ -78,7 +78,8 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
 
     // Gram schmidt solver
     auto gs_params = cfg.getParameter<std::string>("gram_schmidt_options", cfg_scope);
-    GS_solver = new GramSchmidtSolver(m_restart+2, gs_params);
+    int gs_reorthog = cfg.getParameter<int>("gs_reorthog_repeat", cfg_scope);
+    GS_solver = new GramSchmidtSolver(m_restart+2, gs_params, gs_reorthog);
 
     CUDA_CHECK(cudaMalloc((void**)&d_norm_tmp, sizeof(float)));
 }

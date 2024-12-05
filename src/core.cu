@@ -539,6 +539,7 @@ inline void registerParameters()
     /* CUSTOM OPTIONS*/
     std::vector<std::string> myVector = {"NORMAL", "MODIFIED", "REORTHOGONALIZED"};
     AMG_Config::registerParameter<std::string>("gram_schmidt_options", "asdfasdf <0>", "you forgot to enter GS option", myVector);
+    AMG_Config::registerParameter<int>("gs_reorthog_repeat", "number of times to reorthogonalize", 1);
 
     // Register Matrix scaling parameters
     std::vector<std::string> scaler_values = getAllScalers();
