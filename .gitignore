@@ -9,3 +9,4 @@ core/src/version.cu
 ci/docker/
 install
 Release
+/cmake-build-normal/
