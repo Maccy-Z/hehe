@@ -463,42 +463,34 @@ public:
         cudaFree(d_work_);
     }
 
-    void lstsq_solve(float* d_A, float* d_b) {
-
-    // using Clock = std::chrono::steady_clock;
-    // using TimePoint = std::chrono::time_point<Clock>;
-    // using Duration = std::chrono::duration<double, std::milli>; // milliseconds
-    // TimePoint start, end;
-    // Duration duration;
-    //
-    // cudaDeviceSynchronize();
-    // start = Clock::now();
-
+    float lstsq_solve(float* d_A, float* d_b) {
     // Compute QR factorization
     cusolverDnSgeqrf(cusolverH_, m_, n_, d_A, m_, d_tau_,
                      d_work_, lwork_, devInfo_);
-
-
 
     // Compute Q^T * b
     cusolverDnSormqr(cusolverH_, CUBLAS_SIDE_LEFT, CUBLAS_OP_T,
                      m_, 1, n_, d_A, m_, d_tau_,
                      d_b, m_, d_work_, lwork_, devInfo_);
-    //
+
     // Solve R * x = c
     constexpr int nrhs = 1;
     constexpr float alpha = 1.0f;
-    //
-
     cublasSetPointerMode(cublasH_, CUBLAS_POINTER_MODE_HOST);
     CUBLAS_CHECK(cublasStrsm(cublasH_, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_UPPER,
                 CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
                 n_, nrhs, &alpha, d_A, m_, d_b, m_));
 
-    // cudaDeviceSynchronize();
-    // end = Clock::now();
-    // duration = end - start;
-    // std::cout << "lstsq " << duration.count() << " ms\n";
+    float resid_norm = 0.0f;
+    int residual_len = m_ - n_;
+    CUBLAS_CHECK( cublasSnrm2( cublasH_,
+                               residual_len,
+                               d_b + n_,   /* start of c₂ */
+                               1,          /* stride */
+                               &resid_norm ) );
+
+    printf("Residual 2-norm = %e\n", resid_norm);
+    return resid_norm;
     }
 
 private:

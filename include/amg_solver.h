@@ -97,6 +97,8 @@ class AMG_Solver
         AMGX_ERROR solve( Vector<T_Config> &b, Vector<T_Config> &x, AMGX_STATUS &status, bool xIsZero = false );
 
         const PODVector_h &get_residual( int res_num ) const;
+        float test_get_residual();
+
         int get_num_iters();
 
         Solver<T_Config> *getSolverObject( ) { return solver; }

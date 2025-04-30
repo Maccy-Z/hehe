@@ -293,6 +293,7 @@ template<class TConfig>
 const typename Solver<TConfig>::PODVector_h &Solver<TConfig>::get_residual(
     int idx) const
 {
+    printf("PRINTING RESIDUAL TEST \n");
     if (!m_store_res_history)
     {
         FatalError("Residual history was not recorded", AMGX_ERR_BAD_PARAMETERS);
@@ -303,6 +304,12 @@ const typename Solver<TConfig>::PODVector_h &Solver<TConfig>::get_residual(
                    AMGX_ERR_BAD_PARAMETERS);
 
     return m_res_history[idx];
+}
+
+template<class TConfig>
+float Solver<TConfig>::test_get_residual()
+{
+    return residual_saved;
 }
 
 template<class TConfig>

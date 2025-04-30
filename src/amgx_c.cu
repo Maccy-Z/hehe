@@ -1948,14 +1948,15 @@ inline AMGX_RC solver_get_iteration_residual(AMGX_solver_handle slv,
 {
     auto *solver = get_mode_object_from<CASE, AMG_Solver, AMGX_solver_handle>(slv);
     cudaSetDevice(solver->getResources()->getDevice(0));
+    *res = (double)solver->test_get_residual();
 
-    if (idx < 0 || idx >= solver->get_residual(it).size())
-    {
-        amgx_printf("Incorrect block index");
-        return AMGX_RC_BAD_PARAMETERS;
-    }
-
-    *res = (double)solver->get_residual(it)[idx];
+    // if (idx < 0 || idx >= solver->get_residual(it).size())
+    // {
+    //     amgx_printf("Incorrect block index");
+    //     return AMGX_RC_BAD_PARAMETERS;
+    // }
+    //
+    // *res = (double)solver->get_residual(it)[idx];
     return AMGX_RC_OK;
 }
 

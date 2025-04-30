@@ -48,7 +48,6 @@ class KrylovSubspaceBuffer
 template<class T_Config>
 class FGMRES_Solver : public Solver<T_Config>
 {
-
     public:
 
         typedef Solver<T_Config> Base;
@@ -90,12 +89,12 @@ class FGMRES_Solver : public Solver<T_Config>
 
         Solver<T_Config> *m_preconditioner;
 
-        SpmvAxpy<T_Config> sp_axpy = SpmvAxpy<T_Config>();
-        GramSchmidtSolver* GS_solver = nullptr;
+        SpmvAxpy<T_Config> m_sp_axpy = SpmvAxpy<T_Config>();
+        GramSchmidtSolver* m_GS_solver = nullptr;
+        LeastSquaresSolver* m_lstsq_solver = nullptr;
 
         //DEVICE WORKSPACE
         KrylovSubspaceBuffer<T_Config> subspace;
-        LeastSquaresSolver* lstsq_solver = nullptr;
         thrust::device_vector<float>* e_vect;
         float* d_norm_tmp;
 
@@ -105,7 +104,6 @@ class FGMRES_Solver : public Solver<T_Config>
         VVector* p_inv_v_m = nullptr;
 
         AMGX_STATUS checkConvergenceGMRES(bool check_V_0);
-
 };
 
 template<class T_Config>

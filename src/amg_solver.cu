@@ -165,6 +165,12 @@ const typename AMG_Solver<T_Config>::PODVector_h   &AMG_Solver<T_Config>::get_re
     return solver->get_residual(res_num);
 }
 
+template < class T_Config >
+float AMG_Solver<T_Config>::test_get_residual()
+{
+    return solver->test_get_residual();
+}
+
 /****************************************************
 * Sets A as the matrix for the AMG system
 ****************************************************/

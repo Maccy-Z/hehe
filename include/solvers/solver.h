@@ -69,6 +69,8 @@ class Solver : public AuxData
         inline int get_num_iters() { return m_num_iters; }
         // Get the residual obtained at iteration i.
         const PODVector_h &get_residual( int i ) const;
+        float test_get_residual();
+
         // Override the maximum number of iterations.
         void set_max_iters(int max_iters);
 
@@ -186,6 +188,8 @@ class Solver : public AuxData
 
         // tag used for communication
         int tag;
+
+        float residual_saved;
 
     protected:
         // Define the matrix and the residual.

@@ -74,12 +74,12 @@ FGMRES_Solver<T_Config>::FGMRES_Solver( AMG_Config &cfg, const std::string &cfg_
     cublasHandle_t handle_cublas = Cublas::get_handle();
     cusolverDnHandle_t hanlde_cusolver = nullptr;
     cusolverDnCreate(&hanlde_cusolver);
-    lstsq_solver = new LeastSquaresSolver(hanlde_cusolver, handle_cublas, m_restart+1, m_restart);
+    m_lstsq_solver = new LeastSquaresSolver(hanlde_cusolver, handle_cublas, m_restart+1, m_restart);
 
     // Gram schmidt solver
     auto gs_params = cfg.getParameter<std::string>("gram_schmidt_options", cfg_scope);
     int gs_reorthog = cfg.getParameter<int>("gs_reorthog_repeat", cfg_scope);
-    GS_solver = new GramSchmidtSolver(m_restart+2, gs_params, gs_reorthog);
+    m_GS_solver = new GramSchmidtSolver(m_restart+2, gs_params, gs_reorthog);
 
     CUDA_CHECK(cudaMalloc((void**)&d_norm_tmp, sizeof(float)));
 }
@@ -88,12 +88,12 @@ template<class T_Config>
 FGMRES_Solver<T_Config>::~FGMRES_Solver()
 {
     if (use_preconditioner) { delete m_preconditioner; }
-    delete lstsq_solver;
+    delete m_lstsq_solver;
     delete e_vect;
     delete v_m_vvect;
     delete p_inv_v_m;
     cudaFree(d_norm_tmp);
-    delete GS_solver;
+    delete m_GS_solver;
 }
 
 
@@ -171,12 +171,12 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     if (m == 0){
         //initialize gmres
         // A never ever changes, but set once per iteration anyway.
-        sp_axpy.set_matrix(A, false);
+        m_sp_axpy.set_matrix(A, false);
 
         subspace.iteration = 0;
         // compute initial residual r0 = b - Ax
         thrust::copy(b.begin(), b.end(), new_basis.begin());
-        sp_axpy.axpy(x_ptr, new_basis_ptr, -1.0f, 1.0f);
+        m_sp_axpy.axpy(x_ptr, new_basis_ptr, -1.0f, 1.0f);
 
         // normalize initial residual. d_norm_tmp = beta = ||r0||
         compute_L2_norm(new_basis, d_norm_tmp);
@@ -208,11 +208,11 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 
     // new_basis is now V_m
     //obtain v_m+1 := A*z_m
-    sp_axpy.axpy(Z.get_col_ptr(m), new_basis_ptr, 1.0f, 0.0f);
+    m_sp_axpy.axpy(Z.get_col_ptr(m), new_basis_ptr, 1.0f, 0.0f);
 
     // Compute entry in Hessenberg matrix and new residual vector.
     // gram_schmidt_step(V.get_col_ptr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
-    GS_solver->gram_schmidt(V.get_col_ptr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
+    m_GS_solver->gram_schmidt(V.get_col_ptr(0), m_dim, m, H.getDevicePointer(), m_restart+1, new_basis_ptr);
 
     //H(m+1,m) = || v_m+1 ||
     compute_L2_norm(new_basis, d_norm_tmp);
@@ -230,7 +230,7 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     if (this->is_last_iter() || m == m_restart - 1 )
     {
         // H u = e
-        lstsq_solver->lstsq_solve(H.getDevicePointer(), e_vect_ptr);
+        this->residual_saved = m_lstsq_solver->lstsq_solve(H.getDevicePointer(), e_vect_ptr);
         // printvec(e_vect_ptr, m_restart+1, "\ne_vect");
 
         // x = x + Z * u
