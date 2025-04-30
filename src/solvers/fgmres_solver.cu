@@ -171,7 +171,7 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     if (m == 0){
         //initialize gmres
         // A never ever changes, but set once per iteration anyway.
-        sp_axpy.set_matrix(A);
+        sp_axpy.set_matrix(A, false);
 
         subspace.iteration = 0;
         // compute initial residual r0 = b - Ax
@@ -254,7 +254,6 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
 
     cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST);
     return AMGX_ST_NOT_CONVERGED;
-    //return Base::m_monitor_convergence ? conv_stat : AMGX_ST_CONVERGED;
 }
 
 template<class T_Config>

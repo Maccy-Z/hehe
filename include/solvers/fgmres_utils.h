@@ -714,18 +714,26 @@ public:
         }
     }
 
-    void set_matrix(Matrix<T_Config> &A) {
+    void set_matrix(Matrix<T_Config> &A, bool reset_matrix) {
         // If a matrix was previously set, clean up existing resources
         if (matrix_set) {
-            if (matA) {
-                cusparseDestroySpMat(matA);
-                matA = nullptr;
+            if (reset_matrix)
+            {
+                if (matA) {
+                    cusparseDestroySpMat(matA);
+                    matA = nullptr;
+                }
+                if (dBuffer) {
+                    cudaFree(dBuffer);
+                    dBuffer = nullptr;
+                    bufferSize = 0;
+                }
+            }else
+            {
+                return;
             }
-            if (dBuffer) {
-                cudaFree(dBuffer);
-                dBuffer = nullptr;
-                bufferSize = 0;
-            }
+
+
         }
 
         // Store matrix dimensions
