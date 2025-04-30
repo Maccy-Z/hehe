@@ -340,25 +340,6 @@ class GramSchmidtSolver {
                             n,H_col, 1,&one, Vm1, 1)
             );
 
-            // Reorthogonalization step
-            // Compute H_col_new = V^T * Vm1 using pre-allocated buffer
-            // CUBLAS_CHECK(
-            //     cublasSgemv(handle, CUBLAS_OP_T, n,m + 1, &one,d_V, n, Vm1,
-            //                 1, &zero,d_H_col_new_,1)
-            // );
-            //
-            // // Update Vm1 = Vm1 - V * H_col_new
-            // CUBLAS_CHECK(
-            //     cublasSgemv(handle, CUBLAS_OP_N, n, m + 1, &minus_one,
-            //                 d_V,n,d_H_col_new_,1,&one, Vm1, 1)
-            // );
-            //
-            // // Update H_col += H_col_new
-            // CUBLAS_CHECK(
-            //     cublasSaxpy(handle,
-            //                 m + 1, &one,d_H_col_new_,1, H_col,1)
-            // );
-
             // Reorthogonalization steps
             for (int i = 0; i < m_reorthog; ++i) {
                 // Compute H_col_new = V^T * Vm1
