@@ -315,7 +315,6 @@ class GramSchmidtSolver {
 
         // Reorthogonalized GS
         void gram_schmidt_reorthog(float* d_V, int n, int m, float* d_H, int ldH, float* Vm1) {
-           // assert(m < m_max_ && "m exceeds preallocated buffer size.");
 
             // Get cuBLAS handle
             cublasHandle_t handle = Cublas::get_handle();
@@ -489,7 +488,6 @@ public:
                                1,          /* stride */
                                &resid_norm ) );
 
-    printf("Residual 2-norm = %e\n", resid_norm);
     return resid_norm;
     }
 
