@@ -171,7 +171,7 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     if (m == 0){
         //initialize gmres
         // A never ever changes, but set once per iteration anyway.
-        m_sp_axpy.set_matrix(A, false);
+        m_sp_axpy.set_matrix(A, true);
 
         subspace.iteration = 0;
         // compute initial residual r0 = b - Ax
@@ -231,7 +231,7 @@ FGMRES_Solver<T_Config>::solve_iteration( VVector &b, VVector &x, bool xIsZero )
     {
         // H u = e
         this->residual_saved = m_lstsq_solver->lstsq_solve(H.getDevicePointer(), e_vect_ptr);
-        // printvec(e_vect_ptr, m_restart+1, "\ne_vect");
+        printvec(e_vect_ptr, m_restart+1, "\ne_vect");
 
         // x = x + Z * u
         constexpr float one = 1.0f;
